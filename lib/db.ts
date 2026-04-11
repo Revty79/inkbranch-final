@@ -88,12 +88,54 @@ async function initializeSchema() {
       UNIQUE(spine_version_id, rule_type, sort_order)
     );
 
+    CREATE TABLE IF NOT EXISTS story_sessions (
+      id TEXT PRIMARY KEY,
+      world_id TEXT NOT NULL REFERENCES story_worlds(id) ON DELETE CASCADE,
+      reader_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      spine_version_id TEXT REFERENCES world_spine_versions(id) ON DELETE SET NULL,
+      status TEXT NOT NULL DEFAULT 'ACTIVE' CHECK (status IN ('ACTIVE', 'COMPLETED', 'ABANDONED')),
+      started_at TIMESTAMPTZ NOT NULL,
+      completed_at TIMESTAMPTZ,
+      updated_at TIMESTAMPTZ NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS library_books (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      world_id TEXT NOT NULL REFERENCES story_worlds(id) ON DELETE CASCADE,
+      source TEXT NOT NULL DEFAULT 'MANUAL_ADD' CHECK (source IN ('AUTHOR_AUTO', 'MANUAL_ADD', 'ADMIN_GRANT')),
+      created_at TIMESTAMPTZ NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS story_turns (
+      id TEXT PRIMARY KEY,
+      session_id TEXT NOT NULL REFERENCES story_sessions(id) ON DELETE CASCADE,
+      turn_index INTEGER NOT NULL,
+      reader_input TEXT NOT NULL,
+      chapter_title TEXT,
+      choice_options TEXT NOT NULL DEFAULT '[]',
+      ai_response TEXT NOT NULL,
+      model TEXT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL,
+      UNIQUE(session_id, turn_index)
+    );
+
+    ALTER TABLE story_turns
+      ADD COLUMN IF NOT EXISTS chapter_title TEXT;
+    ALTER TABLE story_turns
+      ADD COLUMN IF NOT EXISTS choice_options TEXT NOT NULL DEFAULT '[]';
+
     CREATE UNIQUE INDEX IF NOT EXISTS users_email_unique_idx ON users(email);
     CREATE UNIQUE INDEX IF NOT EXISTS story_worlds_slug_unique_idx ON story_worlds(slug);
     CREATE INDEX IF NOT EXISTS story_worlds_author_updated_idx ON story_worlds(author_id, updated_at DESC);
     CREATE INDEX IF NOT EXISTS story_worlds_status_updated_idx ON story_worlds(status, updated_at DESC);
     CREATE INDEX IF NOT EXISTS world_spine_versions_world_active_idx ON world_spine_versions(world_id, is_active);
     CREATE INDEX IF NOT EXISTS world_rules_spine_type_idx ON world_rules(spine_version_id, rule_type);
+    CREATE INDEX IF NOT EXISTS story_sessions_reader_status_idx ON story_sessions(reader_id, status);
+    CREATE INDEX IF NOT EXISTS story_sessions_world_reader_idx ON story_sessions(world_id, reader_id);
+    CREATE UNIQUE INDEX IF NOT EXISTS library_books_user_world_uidx ON library_books(user_id, world_id);
+    CREATE INDEX IF NOT EXISTS library_books_user_created_idx ON library_books(user_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS story_turns_session_idx ON story_turns(session_id);
   `);
 }
 

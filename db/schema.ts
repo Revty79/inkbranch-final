@@ -133,3 +133,90 @@ export const worldRules = pgTable(
     index("world_rules_spine_type_idx").on(table.spineVersionId, table.ruleType),
   ],
 );
+
+export const storySessions = pgTable(
+  "story_sessions",
+  {
+    id: text("id").primaryKey(),
+    worldId: text("world_id")
+      .notNull()
+      .references(() => storyWorlds.id, { onDelete: "cascade" }),
+    readerId: text("reader_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    spineVersionId: text("spine_version_id").references(() => worldSpineVersions.id, {
+      onDelete: "set null",
+    }),
+    status: text("status", {
+      enum: ["ACTIVE", "COMPLETED", "ABANDONED"],
+    })
+      .notNull()
+      .default("ACTIVE"),
+    startedAt: timestamp("started_at", {
+      withTimezone: true,
+      mode: "date",
+    }).notNull(),
+    completedAt: timestamp("completed_at", {
+      withTimezone: true,
+      mode: "date",
+    }),
+    updatedAt: timestamp("updated_at", {
+      withTimezone: true,
+      mode: "date",
+    }).notNull(),
+  },
+  (table) => [
+    index("story_sessions_reader_status_idx").on(table.readerId, table.status),
+    index("story_sessions_world_reader_idx").on(table.worldId, table.readerId),
+  ],
+);
+
+export const libraryBooks = pgTable(
+  "library_books",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    worldId: text("world_id")
+      .notNull()
+      .references(() => storyWorlds.id, { onDelete: "cascade" }),
+    source: text("source", {
+      enum: ["AUTHOR_AUTO", "MANUAL_ADD", "ADMIN_GRANT"],
+    })
+      .notNull()
+      .default("MANUAL_ADD"),
+    createdAt: timestamp("created_at", {
+      withTimezone: true,
+      mode: "date",
+    }).notNull(),
+  },
+  (table) => [
+    uniqueIndex("library_books_user_world_uidx").on(table.userId, table.worldId),
+    index("library_books_user_created_idx").on(table.userId, table.createdAt),
+  ],
+);
+
+export const storyTurns = pgTable(
+  "story_turns",
+  {
+    id: text("id").primaryKey(),
+    sessionId: text("session_id")
+      .notNull()
+      .references(() => storySessions.id, { onDelete: "cascade" }),
+    turnIndex: integer("turn_index").notNull(),
+    readerInput: text("reader_input").notNull(),
+    chapterTitle: text("chapter_title"),
+    choiceOptions: text("choice_options").notNull().default("[]"),
+    aiResponse: text("ai_response").notNull(),
+    model: text("model").notNull(),
+    createdAt: timestamp("created_at", {
+      withTimezone: true,
+      mode: "date",
+    }).notNull(),
+  },
+  (table) => [
+    uniqueIndex("story_turns_session_turn_uidx").on(table.sessionId, table.turnIndex),
+    index("story_turns_session_idx").on(table.sessionId),
+  ],
+);

@@ -76,6 +76,31 @@ Backend endpoint:
 - request body: `{ "prompt": "..." }` (optional `"model"` override)
 - response body: `{ "text": "...", "model": "..." }`
 
+## Reader Runtime (Library)
+
+The reader flow is chapter-based:
+
+- books are added to `Library` first
+- creator books are auto-added to the creator's own library
+- readers start from library and generate chapter 1
+- each next chapter is generated from selected suggestion or custom direction input
+
+Runtime tables:
+
+- `library_books`
+- `story_sessions`
+- `story_turns`
+
+Reader endpoints:
+
+- `GET /api/reader/library`
+- `POST /api/reader/library`
+- `GET /api/reader/worlds`
+- `GET /api/reader/sessions`
+- `POST /api/reader/sessions`
+- `GET /api/reader/sessions/:sessionId`
+- `POST /api/reader/sessions/:sessionId/turns`
+
 ## Writer's Desk Foundation
 
 The first authoring pass is now focused on the core contract:

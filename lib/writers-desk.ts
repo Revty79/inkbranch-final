@@ -337,6 +337,21 @@ export async function createWorldWithInitialSpine(
       rules: input.outcomeRules,
     });
 
+    await db.query(
+      `
+        INSERT INTO library_books (
+          id,
+          user_id,
+          world_id,
+          source,
+          created_at
+        )
+        VALUES ($1, $2, $3, $4, $5)
+        ON CONFLICT (user_id, world_id) DO NOTHING
+      `,
+      [randomUUID(), input.authorId, worldId, "AUTHOR_AUTO", nowIso],
+    );
+
     await db.query("COMMIT");
   } catch (error) {
     await db.query("ROLLBACK").catch(() => undefined);
