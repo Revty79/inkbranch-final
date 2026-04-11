@@ -15,6 +15,8 @@ type AuthMessage = {
   text: string;
 };
 
+const SESSION_CHECK_TIMEOUT_MS = 3500;
+
 function formatRole(role: AuthUser["role"]) {
   return role.toLowerCase();
 }
@@ -34,13 +36,24 @@ export default function Home() {
 
   useEffect(() => {
     let isMounted = true;
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => {
+      controller.abort();
+    }, SESSION_CHECK_TIMEOUT_MS);
 
     async function checkSession() {
       try {
         const response = await fetch("/api/auth/me", {
           method: "GET",
           cache: "no-store",
+          credentials: "include",
+          signal: controller.signal,
         });
+
+        if (!response.ok) {
+          return;
+        }
+
         const payload = (await response.json().catch(() => null)) as
           | { user?: AuthUser | null }
           | null;
@@ -50,7 +63,12 @@ export default function Home() {
           router.refresh();
           return;
         }
+      } catch (error) {
+        if (!(error instanceof DOMException && error.name === "AbortError")) {
+          console.error("Session check failed", error);
+        }
       } finally {
+        window.clearTimeout(timeoutId);
         if (isMounted) {
           setCheckingSession(false);
         }
@@ -61,6 +79,8 @@ export default function Home() {
 
     return () => {
       isMounted = false;
+      window.clearTimeout(timeoutId);
+      controller.abort();
     };
   }, [router]);
 
@@ -75,6 +95,7 @@ export default function Home() {
         headers: {
           "Content-Type": "application/json",
         },
+        credentials: "include",
         body: JSON.stringify({
           email: loginEmail,
           password: loginPassword,
@@ -121,6 +142,7 @@ export default function Home() {
         headers: {
           "Content-Type": "application/json",
         },
+        credentials: "include",
         body: JSON.stringify({
           name: registerName,
           email: registerEmail,
@@ -161,41 +183,28 @@ export default function Home() {
 
   const isLoginSubmitting = activeForm === "login";
   const isRegisterSubmitting = activeForm === "register";
-  const isDisabled = checkingSession || isLoginSubmitting || isRegisterSubmitting;
-
-  if (checkingSession) {
-    return (
-      <main className="flex min-h-screen items-center justify-center px-4 py-10">
-        <div className="parchment-surface w-full max-w-lg rounded-3xl p-8 text-center shadow-2xl backdrop-blur-md">
-          <p className="text-sm tracking-[0.14em] text-[var(--ink-muted)] uppercase">
-            InkBranch
-          </p>
-          <h1 className="mt-3 text-3xl font-semibold">Opening the gates...</h1>
-        </div>
-      </main>
-    );
-  }
+  const isDisabled = isLoginSubmitting || isRegisterSubmitting;
 
   return (
-    <main className="flex min-h-screen items-center justify-center px-4 py-10">
-      <div className="parchment-surface w-full max-w-6xl rounded-3xl p-6 shadow-2xl backdrop-blur-md md:p-10">
-        <div className="grid gap-8 md:grid-cols-2">
+    <main className="flex min-h-screen items-center justify-center px-4 py-6 pt-[calc(1.5rem+env(safe-area-inset-top))] pb-[calc(1.5rem+env(safe-area-inset-bottom))] sm:py-10">
+      <div className="parchment-surface w-full max-w-6xl rounded-[1.75rem] p-5 shadow-2xl backdrop-blur-md sm:p-6 md:p-10">
+        <div className="grid gap-6 md:grid-cols-2 md:gap-8">
           <section className="flex flex-col justify-between">
             <div className="space-y-4">
               <p className="inline-block rounded-full border border-[var(--parchment-border)] bg-[var(--parchment-soft)] px-3 py-1 text-xs tracking-[0.18em] text-[var(--ink-muted)] uppercase">
                 Welcome To InkBranch
               </p>
-              <h1 className="text-4xl font-semibold leading-tight md:text-5xl">
+              <h1 className="text-3xl font-semibold leading-tight sm:text-4xl md:text-5xl">
                 Stories are not just read. They are lived.
               </h1>
-              <p className="max-w-xl text-base leading-7 text-[var(--ink-muted)] md:text-lg">
+              <p className="max-w-xl text-base leading-7 text-[var(--ink-muted)] sm:text-lg">
                 InkBranch is an AI-powered interactive storytelling platform.
                 Creators design the world, the rules, and the narrative
                 boundaries. Readers step inside and shape the story by making
                 choices or writing their own actions.
               </p>
             </div>
-            <p className="mt-6 text-sm text-[var(--ink-muted)]">
+            <p className="mt-6 text-sm leading-6 text-[var(--ink-muted)]">
               AI continues each scene in real time while staying true to the
               creator&apos;s vision. Every path is yours. Every story still belongs
               to its world.
@@ -203,6 +212,12 @@ export default function Home() {
           </section>
 
           <section className="space-y-5">
+            {checkingSession ? (
+              <div className="rounded-xl border border-[var(--parchment-border)] bg-[var(--parchment-soft)] px-4 py-3 text-sm text-[var(--ink-muted)]">
+                Opening the gates... checking for an existing session.
+              </div>
+            ) : null}
+
             {message ? (
               <div
                 className={`rounded-xl border px-4 py-3 text-sm ${
@@ -227,7 +242,7 @@ export default function Home() {
                   autoComplete="email"
                   value={loginEmail}
                   onChange={(event) => setLoginEmail(event.target.value)}
-                  className="parchment-input w-full rounded-lg px-3 py-2 text-sm outline-none transition"
+                  className="parchment-input w-full rounded-lg px-3 py-3 text-base outline-none transition md:py-2 md:text-sm"
                   disabled={isDisabled}
                   required
                 />
@@ -240,13 +255,13 @@ export default function Home() {
                   autoComplete="current-password"
                   value={loginPassword}
                   onChange={(event) => setLoginPassword(event.target.value)}
-                  className="parchment-input w-full rounded-lg px-3 py-2 text-sm outline-none transition"
+                  className="parchment-input w-full rounded-lg px-3 py-3 text-base outline-none transition md:py-2 md:text-sm"
                   disabled={isDisabled}
                   required
                 />
                 <button
                   type="submit"
-                  className="parchment-button mt-2 w-full rounded-lg px-4 py-2 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-70"
+                  className="parchment-button mt-2 w-full rounded-lg px-4 py-3 text-base font-semibold transition disabled:cursor-not-allowed disabled:opacity-70 md:py-2 md:text-sm"
                   disabled={isDisabled}
                 >
                   {isLoginSubmitting ? "Logging In..." : "Log In"}
@@ -269,7 +284,7 @@ export default function Home() {
                   autoComplete="name"
                   value={registerName}
                   onChange={(event) => setRegisterName(event.target.value)}
-                  className="parchment-input w-full rounded-lg px-3 py-2 text-sm outline-none transition"
+                  className="parchment-input w-full rounded-lg px-3 py-3 text-base outline-none transition md:py-2 md:text-sm"
                   disabled={isDisabled}
                 />
                 <label className="parchment-label block text-sm font-medium">
@@ -281,7 +296,7 @@ export default function Home() {
                   autoComplete="email"
                   value={registerEmail}
                   onChange={(event) => setRegisterEmail(event.target.value)}
-                  className="parchment-input w-full rounded-lg px-3 py-2 text-sm outline-none transition"
+                  className="parchment-input w-full rounded-lg px-3 py-3 text-base outline-none transition md:py-2 md:text-sm"
                   disabled={isDisabled}
                   required
                 />
@@ -294,13 +309,13 @@ export default function Home() {
                   autoComplete="new-password"
                   value={registerPassword}
                   onChange={(event) => setRegisterPassword(event.target.value)}
-                  className="parchment-input w-full rounded-lg px-3 py-2 text-sm outline-none transition"
+                  className="parchment-input w-full rounded-lg px-3 py-3 text-base outline-none transition md:py-2 md:text-sm"
                   disabled={isDisabled}
                   required
                 />
                 <button
                   type="submit"
-                  className="parchment-button mt-2 w-full rounded-lg px-4 py-2 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-70"
+                  className="parchment-button mt-2 w-full rounded-lg px-4 py-3 text-base font-semibold transition disabled:cursor-not-allowed disabled:opacity-70 md:py-2 md:text-sm"
                   disabled={isDisabled}
                 >
                   {isRegisterSubmitting ? "Creating Account..." : "Register"}
