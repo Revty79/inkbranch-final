@@ -1,31 +1,204 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --background: #efe1c4;
+  --foreground: #3b2b18;
+  --parchment: #efe1c4;
+  --parchment-soft: #fff7e8;
+  --parchment-panel: #efe1c4e6;
+  --parchment-card: #fff7e8f2;
+  --parchment-border: #c7ab7a;
+  --ink: #3b2b18;
+  --ink-muted: #5e4528;
+  --ink-soft: #f8efdb;
+  --ink-button: #5f4527;
+  --ink-button-hover: #4f391f;
+  --focus-border: #8d6f45;
+  --focus-ring: #d7bf98;
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
+  --color-parchment: var(--parchment);
+  --color-parchment-soft: var(--parchment-soft);
+  --color-parchment-border: var(--parchment-border);
+  --color-ink: var(--ink);
+  --color-ink-muted: var(--ink-muted);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+html,
+body {
+  min-height: 100%;
 }
 
-body {
-  background-color: var(--background);
+html {
+  background-color: var(--parchment);
   background-image: url("/background.png");
   background-position: center;
   background-repeat: no-repeat;
   background-size: cover;
   background-attachment: fixed;
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+}
+
+body {
+  background-color: var(--parchment);
+  background-image: url("/background.png");
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: cover;
+  background-attachment: fixed;
+  margin: 0;
+  color: var(--ink);
+  font-family: var(--font-geist-sans), sans-serif;
+}
+
+.parchment-surface {
+  border: 1px solid var(--parchment-border);
+  background-color: var(--parchment-panel);
+}
+
+.parchment-card {
+  border: 1px solid var(--parchment-border);
+  background-color: var(--parchment-card);
+}
+
+.parchment-label {
+  color: var(--ink-muted);
+}
+
+.parchment-input {
+  border: 1px solid var(--parchment-border);
+  background-color: var(--parchment-soft);
+  color: var(--ink);
+}
+
+.parchment-input::placeholder {
+  color: var(--ink-muted);
+  opacity: 0.8;
+}
+
+.parchment-input:focus {
+  border-color: var(--focus-border);
+  box-shadow: 0 0 0 2px var(--focus-ring);
+}
+
+.parchment-button {
+  background-color: var(--ink-button);
+  color: var(--ink-soft);
+}
+
+.parchment-button:hover {
+  background-color: var(--ink-button-hover);
+}
+
+.book-card {
+  position: relative;
+  display: flex;
+  min-height: 240px;
+  flex-direction: column;
+  justify-content: space-between;
+  overflow: hidden;
+  border: 1px solid rgba(59, 43, 24, 0.35);
+  border-radius: 0.95rem;
+  padding: 1rem 1rem 1.1rem 1.35rem;
+  color: #f8efdb;
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 241, 214, 0.08),
+    0 16px 28px rgba(30, 20, 12, 0.3);
+  transition:
+    transform 180ms ease,
+    box-shadow 180ms ease;
+}
+
+.book-card::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 100%;
+  width: 16px;
+  background: linear-gradient(
+    90deg,
+    rgba(26, 16, 10, 0.72) 0%,
+    rgba(81, 53, 33, 0.65) 55%,
+    rgba(200, 158, 113, 0.3) 100%
+  );
+}
+
+.book-card::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: repeating-linear-gradient(
+    -45deg,
+    rgba(255, 255, 255, 0.03) 0 4px,
+    rgba(255, 255, 255, 0.08) 4px 8px
+  );
+  pointer-events: none;
+}
+
+.book-card:hover {
+  transform: translateY(-4px) rotate(-0.35deg);
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 241, 214, 0.08),
+    0 22px 34px rgba(30, 20, 12, 0.35);
+}
+
+.book-card:focus-visible {
+  outline: 2px solid rgba(255, 244, 222, 0.9);
+  outline-offset: 3px;
+}
+
+.book-card-kicker {
+  margin-bottom: 0.45rem;
+  padding-left: 0.35rem;
+  font-size: 0.72rem;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: rgba(249, 236, 210, 0.86);
+}
+
+.book-card-title {
+  margin-bottom: 0.55rem;
+  padding-left: 0.35rem;
+  font-size: 1.6rem;
+  line-height: 1.2;
+  font-weight: 700;
+}
+
+.book-card-description {
+  padding-left: 0.35rem;
+  font-size: 0.93rem;
+  line-height: 1.45;
+  color: rgba(253, 244, 228, 0.88);
+}
+
+.book-card-status {
+  width: fit-content;
+  margin-left: 0.35rem;
+  border: 1px solid rgba(249, 236, 210, 0.4);
+  border-radius: 999px;
+  background: rgba(255, 245, 224, 0.12);
+  padding: 0.2rem 0.55rem;
+  font-size: 0.73rem;
+  letter-spacing: 0.04em;
+}
+
+.book-card-bookstore {
+  background: linear-gradient(145deg, #7a4324 0%, #4a2312 100%);
+}
+
+.book-card-library {
+  background: linear-gradient(145deg, #244b58 0%, #13252f 100%);
+}
+
+.book-card-desk {
+  background: linear-gradient(145deg, #705223 0%, #402d12 100%);
+}
+
+.book-card-admin {
+  background: linear-gradient(145deg, #472f5f 0%, #22142e 100%);
 }

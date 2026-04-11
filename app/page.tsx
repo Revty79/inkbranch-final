@@ -1,216 +1,315 @@
-import { Cormorant_Garamond, IBM_Plex_Mono } from "next/font/google";
+"use client";
 
-const cardTitleFont = Cormorant_Garamond({
-  subsets: ["latin"],
-  weight: ["500", "700"],
-});
+import { FormEvent, useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 
-const cardBodyFont = IBM_Plex_Mono({
-  subsets: ["latin"],
-  weight: ["400", "500"],
-});
+type AuthUser = {
+  id: string;
+  email: string;
+  name: string | null;
+  role: "READER" | "AUTHOR" | "ADMIN";
+};
+
+type AuthMessage = {
+  type: "success" | "error";
+  text: string;
+};
+
+function formatRole(role: AuthUser["role"]) {
+  return role.toLowerCase();
+}
 
 export default function Home() {
+  const router = useRouter();
+  const [loginEmail, setLoginEmail] = useState("");
+  const [loginPassword, setLoginPassword] = useState("");
+  const [registerName, setRegisterName] = useState("");
+  const [registerEmail, setRegisterEmail] = useState("");
+  const [registerPassword, setRegisterPassword] = useState("");
+  const [activeForm, setActiveForm] = useState<"login" | "register" | null>(
+    null,
+  );
+  const [message, setMessage] = useState<AuthMessage | null>(null);
+  const [checkingSession, setCheckingSession] = useState(true);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    async function checkSession() {
+      try {
+        const response = await fetch("/api/auth/me", {
+          method: "GET",
+          cache: "no-store",
+        });
+        const payload = (await response.json().catch(() => null)) as
+          | { user?: AuthUser | null }
+          | null;
+
+        if (payload?.user) {
+          router.replace("/dashboard");
+          router.refresh();
+          return;
+        }
+      } finally {
+        if (isMounted) {
+          setCheckingSession(false);
+        }
+      }
+    }
+
+    checkSession();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [router]);
+
+  async function handleLoginSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setActiveForm("login");
+    setMessage(null);
+
+    try {
+      const response = await fetch("/api/auth/login", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          email: loginEmail,
+          password: loginPassword,
+        }),
+      });
+
+      const payload = (await response.json().catch(() => null)) as
+        | { user?: AuthUser; error?: string }
+        | null;
+
+      if (!response.ok || !payload?.user) {
+        throw new Error(payload?.error ?? "Login failed. Please try again.");
+      }
+
+      setMessage({
+        type: "success",
+        text: `Welcome back${payload.user.name ? `, ${payload.user.name}` : ""}. Signed in as ${formatRole(payload.user.role)}.`,
+      });
+      setLoginPassword("");
+      router.push("/dashboard");
+      router.refresh();
+      return;
+    } catch (error) {
+      setMessage({
+        type: "error",
+        text:
+          error instanceof Error
+            ? error.message
+            : "Login failed. Please try again.",
+      });
+    } finally {
+      setActiveForm(null);
+    }
+  }
+
+  async function handleRegisterSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setActiveForm("register");
+    setMessage(null);
+
+    try {
+      const response = await fetch("/api/auth/register", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          name: registerName,
+          email: registerEmail,
+          password: registerPassword,
+        }),
+      });
+
+      const payload = (await response.json().catch(() => null)) as
+        | { user?: AuthUser; error?: string }
+        | null;
+
+      if (!response.ok || !payload?.user) {
+        throw new Error(payload?.error ?? "Registration failed. Please try again.");
+      }
+
+      setMessage({
+        type: "success",
+        text: `Account created for ${payload.user.email}. Assigned role: ${formatRole(payload.user.role)}.`,
+      });
+      setRegisterName("");
+      setRegisterEmail("");
+      setRegisterPassword("");
+      router.push("/dashboard");
+      router.refresh();
+      return;
+    } catch (error) {
+      setMessage({
+        type: "error",
+        text:
+          error instanceof Error
+            ? error.message
+            : "Registration failed. Please try again.",
+      });
+    } finally {
+      setActiveForm(null);
+    }
+  }
+
+  const isLoginSubmitting = activeForm === "login";
+  const isRegisterSubmitting = activeForm === "register";
+  const isDisabled = checkingSession || isLoginSubmitting || isRegisterSubmitting;
+
+  if (checkingSession) {
+    return (
+      <main className="flex min-h-screen items-center justify-center px-4 py-10">
+        <div className="parchment-surface w-full max-w-lg rounded-3xl p-8 text-center shadow-2xl backdrop-blur-md">
+          <p className="text-sm tracking-[0.14em] text-[var(--ink-muted)] uppercase">
+            InkBranch
+          </p>
+          <h1 className="mt-3 text-3xl font-semibold">Opening the gates...</h1>
+        </div>
+      </main>
+    );
+  }
+
   return (
-    <main className="min-h-screen px-4 py-8 text-[#2f2418] sm:px-8 sm:py-12">
-      <section className="relative mx-auto w-full max-w-6xl overflow-hidden rounded-[30px] border border-[#b08a58]/40 bg-[linear-gradient(140deg,rgba(249,244,229,0.93),rgba(234,220,188,0.9))] p-5 shadow-[0_24px_60px_rgba(44,29,11,0.25)] backdrop-blur-[3px] sm:p-9">
-        <div className="pointer-events-none absolute -right-20 -top-20 h-56 w-56 rounded-full bg-[radial-gradient(circle,rgba(139,101,60,0.26),rgba(139,101,60,0))]" />
-        <div className="pointer-events-none absolute -bottom-24 -left-16 h-64 w-64 rounded-full bg-[radial-gradient(circle,rgba(112,75,43,0.2),rgba(112,75,43,0))]" />
-
-        <header className="relative mb-8 border-b border-dashed border-[#89663f]/45 pb-6 sm:mb-10 sm:pb-8">
-          <p
-            className={`${cardBodyFont.className} mb-2 text-xs uppercase tracking-[0.3em] text-[#6a5234]`}
-          >
-            InkBranch Story Registry
-          </p>
-          <h1
-            className={`${cardTitleFont.className} text-4xl leading-tight text-[#2f2418] sm:text-5xl`}
-          >
-            Interactive License Desk
-          </h1>
-          <p className="mt-3 max-w-2xl text-sm leading-7 text-[#58452f] sm:text-base">
-            Create an InkBranch account, open your story runs, and manage your
-            access path. New accounts always begin as Reader profiles.
-          </p>
-          <p
-            className={`${cardBodyFont.className} mt-3 text-xs uppercase tracking-[0.15em] text-[#6a5234]`}
-          >
-            Stable spine | Flexible experience
-          </p>
-        </header>
-
-        <div className="relative grid gap-6 md:grid-cols-2">
-          <section className="rounded-2xl border-2 border-[#be9862]/60 bg-[linear-gradient(160deg,#f9efd3,#f4e4ba)] p-6 shadow-[0_14px_28px_rgba(95,63,29,0.18)] sm:p-7">
-            <p
-              className={`${cardBodyFont.className} mb-1 text-xs uppercase tracking-[0.24em] text-[#6a5234]`}
-            >
-              New Account
+    <main className="flex min-h-screen items-center justify-center px-4 py-10">
+      <div className="parchment-surface w-full max-w-6xl rounded-3xl p-6 shadow-2xl backdrop-blur-md md:p-10">
+        <div className="grid gap-8 md:grid-cols-2">
+          <section className="flex flex-col justify-between">
+            <div className="space-y-4">
+              <p className="inline-block rounded-full border border-[var(--parchment-border)] bg-[var(--parchment-soft)] px-3 py-1 text-xs tracking-[0.18em] text-[var(--ink-muted)] uppercase">
+                Welcome To InkBranch
+              </p>
+              <h1 className="text-4xl font-semibold leading-tight md:text-5xl">
+                Stories are not just read. They are lived.
+              </h1>
+              <p className="max-w-xl text-base leading-7 text-[var(--ink-muted)] md:text-lg">
+                InkBranch is an AI-powered interactive storytelling platform.
+                Creators design the world, the rules, and the narrative
+                boundaries. Readers step inside and shape the story by making
+                choices or writing their own actions.
+              </p>
+            </div>
+            <p className="mt-6 text-sm text-[var(--ink-muted)]">
+              AI continues each scene in real time while staying true to the
+              creator&apos;s vision. Every path is yours. Every story still belongs
+              to its world.
             </p>
-            <h2 className={`${cardTitleFont.className} mb-5 text-3xl text-[#3b2c1c]`}>
-              Create InkBranch License
-            </h2>
-            <form className={`${cardBodyFont.className} space-y-4 text-sm`}>
-              <div>
-                <label htmlFor="fullName" className="mb-1.5 block text-[#4d3a25]">
-                  Profile Name
-                </label>
-                <input
-                  id="fullName"
-                  name="fullName"
-                  type="text"
-                  placeholder="Avery Knox"
-                  className="w-full rounded-xl border border-[#b58f5f] bg-[#fff8e9]/80 px-3 py-2.5 outline-none transition focus:border-[#6e4e2b] focus:ring-2 focus:ring-[#cda76f]/45"
-                />
+          </section>
+
+          <section className="space-y-5">
+            {message ? (
+              <div
+                className={`rounded-xl border px-4 py-3 text-sm ${
+                  message.type === "success"
+                    ? "border-emerald-700/40 bg-emerald-100/75 text-emerald-900"
+                    : "border-rose-700/40 bg-rose-100/75 text-rose-900"
+                }`}
+              >
+                {message.text}
               </div>
-              <div>
-                <label htmlFor="email" className="mb-1.5 block text-[#4d3a25]">
+            ) : null}
+
+            <div className="parchment-card rounded-2xl p-5 shadow-lg">
+              <h2 className="text-xl font-semibold">Log In</h2>
+              <form className="mt-4 space-y-3" onSubmit={handleLoginSubmit}>
+                <label className="parchment-label block text-sm font-medium">
                   Email
                 </label>
                 <input
-                  id="email"
-                  name="email"
                   type="email"
-                  placeholder="you@inkbranch.io"
-                  className="w-full rounded-xl border border-[#b58f5f] bg-[#fff8e9]/80 px-3 py-2.5 outline-none transition focus:border-[#6e4e2b] focus:ring-2 focus:ring-[#cda76f]/45"
+                  placeholder="you@example.com"
+                  autoComplete="email"
+                  value={loginEmail}
+                  onChange={(event) => setLoginEmail(event.target.value)}
+                  className="parchment-input w-full rounded-lg px-3 py-2 text-sm outline-none transition"
+                  disabled={isDisabled}
+                  required
                 />
-              </div>
-              <div className="grid gap-4 sm:grid-cols-2">
-                <div>
-                  <label htmlFor="newPin" className="mb-1.5 block text-[#4d3a25]">
-                    Account Passphrase
-                  </label>
-                  <input
-                    id="newPin"
-                    name="newPin"
-                    type="password"
-                    placeholder="****"
-                    className="w-full rounded-xl border border-[#b58f5f] bg-[#fff8e9]/80 px-3 py-2.5 outline-none transition focus:border-[#6e4e2b] focus:ring-2 focus:ring-[#cda76f]/45"
-                  />
-                </div>
-                <div>
-                  <label
-                    htmlFor="confirmPin"
-                    className="mb-1.5 block text-[#4d3a25]"
-                  >
-                    Confirm Passphrase
-                  </label>
-                  <input
-                    id="confirmPin"
-                    name="confirmPin"
-                    type="password"
-                    placeholder="****"
-                    className="w-full rounded-xl border border-[#b58f5f] bg-[#fff8e9]/80 px-3 py-2.5 outline-none transition focus:border-[#6e4e2b] focus:ring-2 focus:ring-[#cda76f]/45"
-                  />
-                </div>
-              </div>
-              <div>
-                <label
-                  htmlFor="accountPath"
-                  className="mb-1.5 block text-[#4d3a25]"
-                >
-                  Preferred Access Path
-                </label>
-                <select
-                  id="accountPath"
-                  name="accountPath"
-                  defaultValue=""
-                  className="w-full rounded-xl border border-[#b58f5f] bg-[#fff8e9]/80 px-3 py-2.5 outline-none transition focus:border-[#6e4e2b] focus:ring-2 focus:ring-[#cda76f]/45"
-                >
-                  <option value="" disabled>
-                    Choose one
-                  </option>
-                  <option value="reader">Reader (Free Profile)</option>
-                  <option value="creator-interest">
-                    Creator Interest (Apply Later)
-                  </option>
-                </select>
-              </div>
-              <button
-                type="submit"
-                className="mt-2 w-full rounded-xl bg-[#5d3f1d] px-4 py-3 text-center text-xs uppercase tracking-[0.18em] text-[#fef6e6] transition hover:bg-[#4c3216]"
-              >
-                Create Account
-              </button>
-              <p className="text-xs leading-6 text-[#5a452e]">
-                Signup creates a Reader account. Author tools are enabled only
-                after a separate upgrade and approval review.
-              </p>
-            </form>
-          </section>
-
-          <section className="rounded-2xl border-2 border-[#7a5940]/55 bg-[linear-gradient(155deg,#f6e5c0,#f0d7aa)] p-6 shadow-[0_14px_28px_rgba(95,63,29,0.2)] sm:p-7">
-            <p
-              className={`${cardBodyFont.className} mb-1 text-xs uppercase tracking-[0.24em] text-[#6a5234]`}
-            >
-              Account Access
-            </p>
-            <h2 className={`${cardTitleFont.className} mb-5 text-3xl text-[#3b2c1c]`}>
-              Sign In
-            </h2>
-            <form className={`${cardBodyFont.className} space-y-4 text-sm`}>
-              <div>
-                <label htmlFor="accessKey" className="mb-1.5 block text-[#4d3a25]">
-                  Email or Access Key
+                <label className="parchment-label block text-sm font-medium">
+                  Password
                 </label>
                 <input
-                  id="accessKey"
-                  name="accessKey"
-                  type="text"
-                  placeholder="reader@inkbranch.io"
-                  className="w-full rounded-xl border border-[#9e7347] bg-[#fff6e2]/85 px-3 py-2.5 outline-none transition focus:border-[#6e4e2b] focus:ring-2 focus:ring-[#bd8d54]/40"
-                />
-              </div>
-              <div>
-                <label htmlFor="pin" className="mb-1.5 block text-[#4d3a25]">
-                  Access Passphrase
-                </label>
-                <input
-                  id="pin"
-                  name="pin"
                   type="password"
-                  placeholder="****"
-                  className="w-full rounded-xl border border-[#9e7347] bg-[#fff6e2]/85 px-3 py-2.5 outline-none transition focus:border-[#6e4e2b] focus:ring-2 focus:ring-[#bd8d54]/40"
+                  placeholder="********"
+                  autoComplete="current-password"
+                  value={loginPassword}
+                  onChange={(event) => setLoginPassword(event.target.value)}
+                  className="parchment-input w-full rounded-lg px-3 py-2 text-sm outline-none transition"
+                  disabled={isDisabled}
+                  required
                 />
-              </div>
-              <div className={`${cardBodyFont.className} flex items-center justify-between`}>
-                <label className="inline-flex items-center gap-2 text-xs text-[#5b452d]">
-                  <input
-                    type="checkbox"
-                    name="rememberMe"
-                    className="h-4 w-4 rounded border-[#9e7347] text-[#5d3f1d] focus:ring-[#bd8d54]"
-                  />
-                  Remember this device
-                </label>
-                <a
-                  href="#"
-                  className="text-xs text-[#5d3f1d] underline decoration-[#7d5b34]/70 underline-offset-2"
+                <button
+                  type="submit"
+                  className="parchment-button mt-2 w-full rounded-lg px-4 py-2 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-70"
+                  disabled={isDisabled}
                 >
-                  Forgot passphrase?
-                </a>
-              </div>
-              <button
-                type="submit"
-                className="mt-2 w-full rounded-xl bg-[#6a4524] px-4 py-3 text-center text-xs uppercase tracking-[0.18em] text-[#fdf5e5] transition hover:bg-[#57381d]"
-              >
-                Open Dashboard
-              </button>
-            </form>
+                  {isLoginSubmitting ? "Logging In..." : "Log In"}
+                </button>
+              </form>
+            </div>
 
-            <div className="mt-6 rounded-xl border border-dashed border-[#8f6b45]/65 bg-[#f5e5bf]/70 p-4">
-              <p
-                className={`${cardBodyFont.className} text-xs uppercase tracking-[0.16em] text-[#664e33]`}
+            <div className="parchment-card rounded-2xl p-5 shadow-lg">
+              <h2 className="text-xl font-semibold">Create Account</h2>
+              <form
+                className="mt-4 space-y-3"
+                onSubmit={handleRegisterSubmit}
               >
-                Role Policy
-              </p>
-              <ul className="mt-2 space-y-1.5 text-sm leading-7 text-[#4b3926]">
-                <li>Reader: free profile with story purchases.</li>
-                <li>Author: paid tools and workspace after approval.</li>
-                <li>Admin: assigned manually by platform owner only.</li>
-              </ul>
+                <label className="parchment-label block text-sm font-medium">
+                  Full Name
+                </label>
+                <input
+                  type="text"
+                  placeholder="Jane Doe"
+                  autoComplete="name"
+                  value={registerName}
+                  onChange={(event) => setRegisterName(event.target.value)}
+                  className="parchment-input w-full rounded-lg px-3 py-2 text-sm outline-none transition"
+                  disabled={isDisabled}
+                />
+                <label className="parchment-label block text-sm font-medium">
+                  Email
+                </label>
+                <input
+                  type="email"
+                  placeholder="you@example.com"
+                  autoComplete="email"
+                  value={registerEmail}
+                  onChange={(event) => setRegisterEmail(event.target.value)}
+                  className="parchment-input w-full rounded-lg px-3 py-2 text-sm outline-none transition"
+                  disabled={isDisabled}
+                  required
+                />
+                <label className="parchment-label block text-sm font-medium">
+                  Password
+                </label>
+                <input
+                  type="password"
+                  placeholder="Create a strong password"
+                  autoComplete="new-password"
+                  value={registerPassword}
+                  onChange={(event) => setRegisterPassword(event.target.value)}
+                  className="parchment-input w-full rounded-lg px-3 py-2 text-sm outline-none transition"
+                  disabled={isDisabled}
+                  required
+                />
+                <button
+                  type="submit"
+                  className="parchment-button mt-2 w-full rounded-lg px-4 py-2 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-70"
+                  disabled={isDisabled}
+                >
+                  {isRegisterSubmitting ? "Creating Account..." : "Register"}
+                </button>
+              </form>
             </div>
           </section>
         </div>
-      </section>
+      </div>
     </main>
   );
 }
