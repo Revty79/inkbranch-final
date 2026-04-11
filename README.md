@@ -41,6 +41,7 @@ Drizzle is wired to `.env.local` through [drizzle.config.ts](/d:/inkbranch-final
 ```bash
 npm run db:export
 npm run db:push
+npm run db:push:review
 npm run db:pull
 npm run db:generate
 npm run db:migrate
@@ -50,6 +51,8 @@ npm run db:studio
 For this project right now:
 
 - use `npm run db:push` while the schema is changing quickly in development
+: this repo runs in non-interactive shells, so `db:push` is configured with `--force`
+- use `npm run db:push:review` when you specifically want the interactive safety prompt
 - use `npm run db:generate` and `npm run db:migrate` once you want tracked migration files
 - use `npm run db:studio` when you want to inspect data visually
 
@@ -59,3 +62,36 @@ For this project right now:
 - `Library`: return to stories you already own
 - `Writer's Desk`: author-only creation tools
 - `Administration Office`: admin-only platform controls
+
+## AI Story Generation
+
+Set these environment values in `.env.local`:
+
+- `GEMINI_API_KEY=<your_key>`
+- `GEMINI_MODEL=gemini-flash-latest` (or another available Gemini model)
+
+Backend endpoint:
+
+- `POST /api/ai/generate-story` (authenticated session required)
+- request body: `{ "prompt": "..." }` (optional `"model"` override)
+- response body: `{ "text": "...", "model": "..." }`
+
+## Writer's Desk Foundation
+
+The first authoring pass is now focused on the core contract:
+
+- author defines world truth and constraints
+- reader makes choices inside those boundaries
+- AI generates scenes while preserving the authored spine
+
+Current authoring tables:
+
+- `story_worlds`: world-level metadata and high-level author intent
+- `world_spine_versions`: versioned narrative spine guidance
+- `world_rules`: categorized constraints (`CANON`, `CHARACTER_TRUTH`, `REQUIRED_EVENT`, `OUTCOME`)
+
+The Writer's Desk UI writes to `/api/author/worlds` and creates:
+
+- one world draft
+- spine version `1`
+- initial rule entries by category
