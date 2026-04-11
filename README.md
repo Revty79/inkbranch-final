@@ -27,8 +27,11 @@ The app creates the `users` table automatically on its first successful database
 Use the local helper script after a user has signed up:
 
 ```bash
+npm run user:list
 npm run user:role -- user@example.com AUTHOR
 npm run user:role -- user@example.com ADMIN
+npm run user:password:check -- user@example.com yourPassword
+npm run user:password:set -- user@example.com newPassword
 ```
 
 ## Database Commands
