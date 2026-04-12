@@ -10,6 +10,7 @@ type DeskWorld = {
   slug: string;
   status: WorldStatus;
   premise: string | null;
+  chapterCap: number | null;
   readerAgency: string | null;
   aiDirective: string | null;
   updatedAt: string;
@@ -21,6 +22,17 @@ type DeskWorld = {
     requiredEvents: number;
     outcomes: number;
   };
+};
+
+type DeskWorldDetail = DeskWorld & {
+  arcStatement: string | null;
+  toneGuide: string | null;
+  narrativeBoundaries: string | null;
+  guardrailInstruction: string | null;
+  canonRules: string[];
+  characterTruthRules: string[];
+  requiredEventRules: string[];
+  outcomeRules: string[];
 };
 
 type Message = {
@@ -51,15 +63,28 @@ function splitRules(value: string) {
     .filter(Boolean);
 }
 
+function joinRules(lines: string[]) {
+  return lines.join("\n");
+}
+
 function getRulesBadgeLabel(totalRules: number) {
   return totalRules === 1 ? "1 rule" : `${totalRules} rules`;
 }
 
+function upsertWorld(worlds: DeskWorld[], world: DeskWorld) {
+  const withoutCurrent = worlds.filter((item) => item.id !== world.id);
+  return [world, ...withoutCurrent].sort((a, b) =>
+    b.updatedAt.localeCompare(a.updatedAt),
+  );
+}
+
 export function WritersDeskClient({ initialWorlds }: Props) {
   const [worlds, setWorlds] = useState<DeskWorld[]>(initialWorlds);
+  const [editingWorldId, setEditingWorldId] = useState<string | null>(null);
   const [title, setTitle] = useState("");
   const [slug, setSlug] = useState("");
   const [premise, setPremise] = useState("");
+  const [chapterCapInput, setChapterCapInput] = useState("");
   const [readerAgency, setReaderAgency] = useState("");
   const [aiDirective, setAiDirective] = useState("");
   const [arcStatement, setArcStatement] = useState("");
@@ -71,6 +96,8 @@ export function WritersDeskClient({ initialWorlds }: Props) {
   const [requiredEventRulesInput, setRequiredEventRulesInput] = useState("");
   const [outcomeRulesInput, setOutcomeRulesInput] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isLoadingEditor, setIsLoadingEditor] = useState(false);
+  const [publishingWorldId, setPublishingWorldId] = useState<string | null>(null);
   const [message, setMessage] = useState<Message | null>(null);
 
   const sortedWorlds = useMemo(
@@ -78,15 +105,39 @@ export function WritersDeskClient({ initialWorlds }: Props) {
     [worlds],
   );
 
-  async function handleCreateWorld(event: FormEvent<HTMLFormElement>) {
+  function resetForm() {
+    setEditingWorldId(null);
+    setTitle("");
+    setSlug("");
+    setPremise("");
+    setChapterCapInput("");
+    setReaderAgency("");
+    setAiDirective("");
+    setArcStatement("");
+    setToneGuide("");
+    setNarrativeBoundaries("");
+    setGuardrailInstruction("");
+    setCanonRulesInput("");
+    setCharacterTruthRulesInput("");
+    setRequiredEventRulesInput("");
+    setOutcomeRulesInput("");
+  }
+
+  async function handleCreateOrUpdateWorld(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
     setIsSubmitting(true);
     setMessage(null);
 
+    const chapterCap = chapterCapInput.trim() ? Number(chapterCapInput) : null;
+    const method = editingWorldId ? "PUT" : "POST";
+    const endpoint = editingWorldId
+      ? `/api/author/worlds/${editingWorldId}`
+      : "/api/author/worlds";
+
     try {
-      const response = await fetch("/api/author/worlds", {
-        method: "POST",
+      const response = await fetch(endpoint, {
+        method,
         headers: {
           "Content-Type": "application/json",
         },
@@ -94,6 +145,7 @@ export function WritersDeskClient({ initialWorlds }: Props) {
           title,
           slug,
           premise,
+          chapterCap,
           readerAgency,
           aiDirective,
           arcStatement,
@@ -112,27 +164,22 @@ export function WritersDeskClient({ initialWorlds }: Props) {
         | null;
 
       if (!response.ok || !payload?.world) {
-        throw new Error(payload?.error ?? "Could not create world draft.");
+        throw new Error(
+          payload?.error ??
+            (editingWorldId
+              ? "Could not update world blueprint."
+              : "Could not create world draft."),
+        );
       }
 
-      const createdWorld = payload.world;
-      setWorlds((current) => [createdWorld, ...current]);
-      setTitle("");
-      setSlug("");
-      setPremise("");
-      setReaderAgency("");
-      setAiDirective("");
-      setArcStatement("");
-      setToneGuide("");
-      setNarrativeBoundaries("");
-      setGuardrailInstruction("");
-      setCanonRulesInput("");
-      setCharacterTruthRulesInput("");
-      setRequiredEventRulesInput("");
-      setOutcomeRulesInput("");
+      const savedWorld = payload.world;
+      setWorlds((current) => upsertWorld(current, savedWorld));
+      resetForm();
       setMessage({
         type: "success",
-        text: `World draft \"${createdWorld.title}\" created with spine version 1.`,
+        text: editingWorldId
+          ? `World \"${savedWorld.title}\" updated.`
+          : `World draft \"${savedWorld.title}\" created with spine version 1.`,
       });
     } catch (error) {
       setMessage({
@@ -140,10 +187,101 @@ export function WritersDeskClient({ initialWorlds }: Props) {
         text:
           error instanceof Error
             ? error.message
-            : "Could not create world draft.",
+            : editingWorldId
+              ? "Could not update world blueprint."
+              : "Could not create world draft.",
       });
     } finally {
       setIsSubmitting(false);
+    }
+  }
+
+  async function handleEditWorld(worldId: string) {
+    setIsLoadingEditor(true);
+    setMessage(null);
+
+    try {
+      const response = await fetch(`/api/author/worlds/${worldId}`, {
+        method: "GET",
+        cache: "no-store",
+      });
+
+      const payload = (await response.json().catch(() => null)) as
+        | { world?: DeskWorldDetail; error?: string }
+        | null;
+
+      if (!response.ok || !payload?.world) {
+        throw new Error(payload?.error ?? "Could not load world blueprint.");
+      }
+
+      const world = payload.world;
+      setEditingWorldId(world.id);
+      setTitle(world.title);
+      setSlug(world.slug);
+      setPremise(world.premise ?? "");
+      setChapterCapInput(
+        typeof world.chapterCap === "number" ? String(world.chapterCap) : "",
+      );
+      setReaderAgency(world.readerAgency ?? "");
+      setAiDirective(world.aiDirective ?? "");
+      setArcStatement(world.arcStatement ?? "");
+      setToneGuide(world.toneGuide ?? "");
+      setNarrativeBoundaries(world.narrativeBoundaries ?? "");
+      setGuardrailInstruction(world.guardrailInstruction ?? "");
+      setCanonRulesInput(joinRules(world.canonRules));
+      setCharacterTruthRulesInput(joinRules(world.characterTruthRules));
+      setRequiredEventRulesInput(joinRules(world.requiredEventRules));
+      setOutcomeRulesInput(joinRules(world.outcomeRules));
+      setMessage({
+        type: "success",
+        text: `Editing \"${world.title}\". Save when ready.`,
+      });
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    } catch (error) {
+      setMessage({
+        type: "error",
+        text:
+          error instanceof Error ? error.message : "Could not load world blueprint.",
+      });
+    } finally {
+      setIsLoadingEditor(false);
+    }
+  }
+
+  async function handlePublishWorld(worldId: string) {
+    setPublishingWorldId(worldId);
+    setMessage(null);
+
+    try {
+      const response = await fetch(`/api/author/worlds/${worldId}`, {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ action: "PUBLISH" }),
+      });
+
+      const payload = (await response.json().catch(() => null)) as
+        | { world?: DeskWorld; error?: string }
+        | null;
+
+      if (!response.ok || !payload?.world) {
+        throw new Error(payload?.error ?? "Could not publish world.");
+      }
+
+      const publishedWorld = payload.world;
+      setWorlds((current) => upsertWorld(current, publishedWorld));
+      setMessage({
+        type: "success",
+        text: `\"${publishedWorld.title}\" is now published and available in the bookstore.`,
+      });
+    } catch (error) {
+      setMessage({
+        type: "error",
+        text: error instanceof Error ? error.message : "Could not publish world.",
+      });
+    } finally {
+      setPublishingWorldId(null);
     }
   }
 
@@ -158,8 +296,8 @@ export function WritersDeskClient({ initialWorlds }: Props) {
         </h2>
         <p className="mt-4 max-w-4xl text-base leading-7 text-[var(--ink-muted)] sm:text-lg">
           This desk is for author truth: canon, required events, character truths, and
-          outcome limits. Readers should still feel agency scene by scene, but the story
-          spine must stay coherent.
+          outcome limits. Readers still get agency scene by scene, while the spine
+          keeps the story coherent.
         </p>
 
         <div className="mt-5 grid gap-4 lg:grid-cols-3">
@@ -168,7 +306,7 @@ export function WritersDeskClient({ initialWorlds }: Props) {
               Author Controls
             </p>
             <p className="mt-2 text-sm leading-6 text-[var(--ink-muted)]">
-              World setup, core arc, canon boundaries, and non-negotiable outcomes.
+              World setup, chapter caps, core arc, canon boundaries, and non-negotiable outcomes.
             </p>
           </article>
           <article className="parchment-card rounded-xl p-4">
@@ -184,7 +322,7 @@ export function WritersDeskClient({ initialWorlds }: Props) {
               AI Controls
             </p>
             <p className="mt-2 text-sm leading-6 text-[var(--ink-muted)]">
-              Real-time scene generation while preserving authored intent and constraints.
+              Real-time chapter generation while preserving authored intent and constraints.
             </p>
           </article>
         </div>
@@ -192,13 +330,15 @@ export function WritersDeskClient({ initialWorlds }: Props) {
 
       <section className="grid gap-5 xl:grid-cols-[minmax(0,1.2fr)_minmax(340px,0.8fr)]">
         <article className="parchment-card rounded-2xl p-5 shadow-lg sm:p-6">
-          <h3 className="text-2xl font-semibold">Create World Blueprint</h3>
+          <h3 className="text-2xl font-semibold">
+            {editingWorldId ? "Edit World Blueprint" : "Create World Blueprint"}
+          </h3>
           <p className="mt-3 text-sm leading-6 text-[var(--ink-muted)]">
-            Start with one world and its first spine version. Use one line per rule. Optional
-            format: <span className="font-semibold">Title: explanation</span>.
+            Build or revise the active world spine. Use one line per rule. Optional format:
+            <span className="font-semibold"> Title: explanation</span>.
           </p>
 
-          <form className="mt-5 space-y-3.5" onSubmit={handleCreateWorld}>
+          <form className="mt-5 space-y-3.5" onSubmit={handleCreateOrUpdateWorld}>
             <label className="parchment-label block text-sm font-medium">World title</label>
             <input
               type="text"
@@ -227,6 +367,19 @@ export function WritersDeskClient({ initialWorlds }: Props) {
               placeholder="What is this world at a high level?"
               className="parchment-input min-h-[80px] w-full rounded-lg px-3 py-2 text-sm outline-none"
               maxLength={3000}
+            />
+
+            <label className="parchment-label block text-sm font-medium">
+              Chapter cap (optional)
+            </label>
+            <input
+              type="number"
+              min={1}
+              max={500}
+              value={chapterCapInput}
+              onChange={(event) => setChapterCapInput(event.target.value)}
+              placeholder="Leave blank for no cap"
+              className="parchment-input w-full rounded-lg px-3 py-2 text-sm outline-none"
             />
 
             <label className="parchment-label block text-sm font-medium">Arc statement</label>
@@ -329,13 +482,34 @@ export function WritersDeskClient({ initialWorlds }: Props) {
               maxLength={3000}
             />
 
-            <button
-              type="submit"
-              disabled={isSubmitting}
-              className="parchment-button mt-2 rounded-full px-5 py-2 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-70"
-            >
-              {isSubmitting ? "Creating World..." : "Create World Draft"}
-            </button>
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              <button
+                type="submit"
+                disabled={isSubmitting || isLoadingEditor}
+                className="parchment-button rounded-full px-5 py-2 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-70"
+              >
+                {isSubmitting
+                  ? editingWorldId
+                    ? "Saving World..."
+                    : "Creating World..."
+                  : editingWorldId
+                    ? "Save World Blueprint"
+                    : "Create World Draft"}
+              </button>
+
+              {editingWorldId ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    resetForm();
+                    setMessage(null);
+                  }}
+                  className="rounded-full border border-[var(--parchment-border)] px-4 py-2 text-sm font-semibold text-[var(--ink)] transition hover:bg-[var(--parchment-soft)]"
+                >
+                  Cancel Edit
+                </button>
+              ) : null}
+            </div>
           </form>
 
           {message ? (
@@ -354,8 +528,8 @@ export function WritersDeskClient({ initialWorlds }: Props) {
         <article className="parchment-card rounded-2xl p-5 shadow-lg sm:p-6">
           <h3 className="text-2xl font-semibold">Your Worlds</h3>
           <p className="mt-3 text-sm leading-6 text-[var(--ink-muted)]">
-            Each world begins with a spine and a set of governing rules. This is the source
-            of truth that guides reader sessions and AI generation.
+            Publish a world when it is ready. Published worlds appear in the bookstore for
+            all app users.
           </p>
 
           <div className="mt-4 space-y-3">
@@ -390,6 +564,11 @@ export function WritersDeskClient({ initialWorlds }: Props) {
                     <span className="rounded-full border border-[var(--parchment-border)] bg-white/45 px-2 py-0.5">
                       {getRulesBadgeLabel(world.ruleCounts.total)}
                     </span>
+                    <span className="rounded-full border border-[var(--parchment-border)] bg-white/45 px-2 py-0.5">
+                      {typeof world.chapterCap === "number"
+                        ? `Cap ${world.chapterCap} chapters`
+                        : "No chapter cap"}
+                    </span>
                     <span>Updated {formatDate(world.updatedAt)}</span>
                   </div>
 
@@ -397,6 +576,36 @@ export function WritersDeskClient({ initialWorlds }: Props) {
                     Canon {world.ruleCounts.canon} | Character truths {world.ruleCounts.characterTruths} |
                     Required events {world.ruleCounts.requiredEvents} | Outcomes {world.ruleCounts.outcomes}
                   </p>
+
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      disabled={isSubmitting || isLoadingEditor}
+                      onClick={() => {
+                        void handleEditWorld(world.id);
+                      }}
+                      className="rounded-full border border-[var(--parchment-border)] px-3 py-1.5 text-xs font-semibold text-[var(--ink)] transition hover:bg-white/65 disabled:cursor-not-allowed disabled:opacity-70"
+                    >
+                      {isLoadingEditor && editingWorldId === world.id ? "Loading..." : "Edit"}
+                    </button>
+
+                    <button
+                      type="button"
+                      disabled={
+                        world.status === "PUBLISHED" || Boolean(publishingWorldId)
+                      }
+                      onClick={() => {
+                        void handlePublishWorld(world.id);
+                      }}
+                      className="parchment-button rounded-full px-3 py-1.5 text-xs font-semibold disabled:cursor-not-allowed disabled:opacity-70"
+                    >
+                      {publishingWorldId === world.id
+                        ? "Publishing..."
+                        : world.status === "PUBLISHED"
+                          ? "Published"
+                          : "Publish To Bookstore"}
+                    </button>
+                  </div>
                 </article>
               ))
             )}

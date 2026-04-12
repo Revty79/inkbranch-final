@@ -16,6 +16,7 @@ CREATE TABLE IF NOT EXISTS story_worlds (
   title TEXT NOT NULL,
   slug TEXT NOT NULL,
   premise TEXT,
+  chapter_cap INTEGER CHECK (chapter_cap IS NULL OR chapter_cap BETWEEN 1 AND 500),
   reader_agency TEXT,
   ai_directive TEXT,
   status TEXT NOT NULL DEFAULT 'DRAFT' CHECK (status IN ('DRAFT', 'PUBLISHED', 'ARCHIVED')),

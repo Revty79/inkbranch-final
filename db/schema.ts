@@ -40,6 +40,7 @@ export const storyWorlds = pgTable(
     title: text("title").notNull(),
     slug: text("slug").notNull(),
     premise: text("premise"),
+    chapterCap: integer("chapter_cap"),
     readerAgency: text("reader_agency"),
     aiDirective: text("ai_directive"),
     status: text("status", {

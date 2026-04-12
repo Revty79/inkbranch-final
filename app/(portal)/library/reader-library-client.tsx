@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 
 import type {
   CatalogWorld,
@@ -21,6 +21,8 @@ type Message = {
   type: "success" | "error";
   text: string;
 };
+
+const READER_PAGE_CHAR_LIMIT = 1900;
 
 function formatDate(value: string) {
   return new Intl.DateTimeFormat("en-US", {
@@ -77,6 +79,80 @@ function updateBooksAfterReading(
   });
 }
 
+function splitParagraphByLength(paragraph: string, maxLength: number) {
+  const words = paragraph.split(/\s+/).filter(Boolean);
+
+  if (words.length === 0) {
+    return [];
+  }
+
+  const chunks: string[] = [];
+  let currentChunk = "";
+
+  for (const word of words) {
+    const nextChunk = currentChunk ? `${currentChunk} ${word}` : word;
+
+    if (currentChunk && nextChunk.length > maxLength) {
+      chunks.push(currentChunk);
+      currentChunk = word;
+      continue;
+    }
+
+    currentChunk = nextChunk;
+  }
+
+  if (currentChunk) {
+    chunks.push(currentChunk);
+  }
+
+  return chunks;
+}
+
+function paginateChapterContent(content: string, pageCharLimit = READER_PAGE_CHAR_LIMIT) {
+  const trimmedContent = content.trim();
+
+  if (!trimmedContent) {
+    return [""];
+  }
+
+  const rawParagraphs = trimmedContent
+    .split(/\n{2,}/)
+    .map((paragraph) => paragraph.trim())
+    .filter(Boolean);
+
+  const normalizedParagraphs = rawParagraphs.flatMap((paragraph) =>
+    paragraph.length > pageCharLimit
+      ? splitParagraphByLength(paragraph, pageCharLimit)
+      : [paragraph],
+  );
+
+  const pages: string[] = [];
+  let currentParagraphs: string[] = [];
+  let currentLength = 0;
+
+  for (const paragraph of normalizedParagraphs) {
+    const paragraphLength = paragraph.length;
+    const joinerLength = currentParagraphs.length > 0 ? 2 : 0;
+    const nextLength = currentLength + joinerLength + paragraphLength;
+
+    if (currentParagraphs.length > 0 && nextLength > pageCharLimit) {
+      pages.push(currentParagraphs.join("\n\n"));
+      currentParagraphs = [paragraph];
+      currentLength = paragraphLength;
+      continue;
+    }
+
+    currentParagraphs.push(paragraph);
+    currentLength = nextLength;
+  }
+
+  if (currentParagraphs.length > 0) {
+    pages.push(currentParagraphs.join("\n\n"));
+  }
+
+  return pages.length > 0 ? pages : [trimmedContent];
+}
+
 export function LibraryReaderClient({
   initialBooks,
   initialCatalogWorlds,
@@ -97,6 +173,11 @@ export function LibraryReaderClient({
   const [isLoadingSession, setIsLoadingSession] = useState(false);
   const [isGeneratingChapter, setIsGeneratingChapter] = useState(false);
   const [message, setMessage] = useState<Message | null>(null);
+  const [selectedChapterId, setSelectedChapterId] = useState<string | null>(
+    initialActiveSession?.chapters[initialActiveSession.chapters.length - 1]?.id ??
+      null,
+  );
+  const [selectedPageIndex, setSelectedPageIndex] = useState(0);
 
   const sortedBooks = useMemo(
     () => [...books].sort((a, b) => b.addedAt.localeCompare(a.addedAt)),
@@ -109,6 +190,71 @@ export function LibraryReaderClient({
   );
 
   const latestChapter = activeSession?.chapters[activeSession.chapters.length - 1] ?? null;
+  const selectedChapter =
+    activeSession?.chapters.find((chapter) => chapter.id === selectedChapterId) ??
+    activeSession?.chapters[activeSession.chapters.length - 1] ??
+    null;
+  const selectedChapterIndex = selectedChapter
+    ? activeSession?.chapters.findIndex((chapter) => chapter.id === selectedChapter.id) ?? -1
+    : -1;
+  const selectedChapterPages = useMemo(
+    () =>
+      selectedChapter
+        ? paginateChapterContent(selectedChapter.content)
+        : ([] as string[]),
+    [selectedChapter],
+  );
+  const normalizedPageIndex =
+    selectedChapterPages.length === 0
+      ? 0
+      : Math.min(selectedPageIndex, selectedChapterPages.length - 1);
+  const currentPageText = selectedChapterPages[normalizedPageIndex] ?? "";
+  const isLatestChapterSelected = Boolean(
+    latestChapter && selectedChapter && latestChapter.id === selectedChapter.id,
+  );
+  const isAtEndOfChapter =
+    selectedChapterPages.length > 0 &&
+    normalizedPageIndex === selectedChapterPages.length - 1;
+  const canGenerateNextChapter = Boolean(
+    activeSession &&
+      latestChapter &&
+      isLatestChapterSelected &&
+      isAtEndOfChapter &&
+      !isGeneratingChapter &&
+      !isLoadingSession,
+  );
+
+  useEffect(() => {
+    if (!activeSession) {
+      setSelectedChapterId(null);
+      setSelectedPageIndex(0);
+      return;
+    }
+
+    const hasSelectedChapter = selectedChapterId
+      ? activeSession.chapters.some((chapter) => chapter.id === selectedChapterId)
+      : false;
+
+    if (!hasSelectedChapter) {
+      const newestChapterId =
+        activeSession.chapters[activeSession.chapters.length - 1]?.id ?? null;
+      setSelectedChapterId(newestChapterId);
+      setSelectedPageIndex(0);
+    }
+  }, [activeSession, selectedChapterId]);
+
+  useEffect(() => {
+    if (selectedChapterPages.length === 0 && selectedPageIndex !== 0) {
+      setSelectedPageIndex(0);
+      return;
+    }
+
+    const maxPageIndex = Math.max(selectedChapterPages.length - 1, 0);
+
+    if (selectedPageIndex > maxPageIndex) {
+      setSelectedPageIndex(maxPageIndex);
+    }
+  }, [selectedChapterPages, selectedPageIndex]);
 
   async function refreshLibraryAndCatalog() {
     const [booksResponse, worldsResponse] = await Promise.all([
@@ -223,6 +369,10 @@ export function LibraryReaderClient({
       setActiveSession(readingSession);
       setSessions((current) => upsertSessionSummary(current, readingSession.session));
       setBooks((current) => updateBooksAfterReading(current, readingSession));
+      setSelectedChapterId(
+        readingSession.chapters[readingSession.chapters.length - 1]?.id ?? null,
+      );
+      setSelectedPageIndex(0);
       setDirectionInput("");
 
       if (payload.chapter) {
@@ -266,6 +416,10 @@ export function LibraryReaderClient({
       }
 
       setActiveSession(payload.session);
+      setSelectedChapterId(
+        payload.session.chapters[payload.session.chapters.length - 1]?.id ?? null,
+      );
+      setSelectedPageIndex(0);
       setDirectionInput("");
     } catch (error) {
       setMessage({
@@ -339,6 +493,8 @@ export function LibraryReaderClient({
           chapters: [...current.chapters, chapter],
         };
       });
+      setSelectedChapterId(chapter.id);
+      setSelectedPageIndex(0);
 
       setSessions((current) =>
         updateSessionAfterChapter(
@@ -395,7 +551,11 @@ export function LibraryReaderClient({
             </div>
             <button
               type="button"
-              onClick={() => setActiveSession(null)}
+              onClick={() => {
+                setActiveSession(null);
+                setSelectedChapterId(null);
+                setSelectedPageIndex(0);
+              }}
               className="rounded-full border border-[var(--parchment-border)] px-4 py-2 text-sm font-semibold text-[var(--ink)] transition hover:bg-[var(--parchment-soft)]"
             >
               Back To Library
@@ -417,79 +577,212 @@ export function LibraryReaderClient({
           </section>
         ) : null}
 
-        <article className="parchment-card rounded-2xl p-5 shadow-lg sm:p-6">
-          <div className="mx-auto w-full max-w-4xl space-y-5">
-            <div className="rounded-lg border border-[var(--parchment-border)] bg-[var(--parchment-soft)] px-4 py-3">
-              <p className="text-sm font-semibold">{activeSession.libraryBook.title}</p>
-              <p className="mt-1 text-xs text-[var(--ink-muted)]">
-                Session {activeSession.session.status} | Updated {formatDate(activeSession.session.updatedAt)}
-              </p>
-            </div>
+        <section className="grid gap-5 xl:grid-cols-[300px_minmax(0,1fr)]">
+          <aside className="parchment-card rounded-2xl p-4 shadow-lg sm:p-5">
+            <h3 className="text-lg font-semibold">Chapter List</h3>
+            <p className="mt-1 text-xs text-[var(--ink-muted)]">
+              Select a chapter to read. Use page buttons to turn pages.
+            </p>
 
-            <div className="space-y-5">
+            <div className="mt-4 max-h-[65vh] space-y-2 overflow-y-auto pr-1">
               {activeSession.chapters.length === 0 ? (
-                <p className="rounded-lg border border-[var(--parchment-border)] bg-[var(--parchment-soft)] px-4 py-3 text-sm text-[var(--ink-muted)]">
+                <p className="rounded-lg border border-[var(--parchment-border)] bg-[var(--parchment-soft)] px-3 py-3 text-xs text-[var(--ink-muted)]">
                   Generating first chapter...
                 </p>
               ) : (
-                activeSession.chapters.map((chapter) => (
-                  <article
-                    key={chapter.id}
-                    className="rounded-lg border border-[var(--parchment-border)] bg-[var(--parchment-soft)] px-4 py-5"
-                  >
-                    <p className="text-xs tracking-[0.12em] text-[var(--ink-muted)] uppercase">
-                      Chapter {chapter.chapterNumber}
-                    </p>
-                    <h3 className="mt-1 text-2xl font-semibold">{chapter.title}</h3>
-                    <p className="mt-4 whitespace-pre-wrap text-base leading-8 text-[var(--ink)]">
-                      {chapter.content}
-                    </p>
-                  </article>
-                ))
+                activeSession.chapters.map((chapter) => {
+                  const isSelected = chapter.id === selectedChapter?.id;
+
+                  return (
+                    <button
+                      key={chapter.id}
+                      type="button"
+                      onClick={() => {
+                        setSelectedChapterId(chapter.id);
+                        setSelectedPageIndex(0);
+                      }}
+                      className={`w-full rounded-lg border px-3 py-2 text-left transition ${
+                        isSelected
+                          ? "border-[var(--focus-border)] bg-[var(--parchment-soft)]"
+                          : "border-[var(--parchment-border)] bg-white/35 hover:bg-white/60"
+                      }`}
+                    >
+                      <p className="text-[11px] tracking-[0.12em] text-[var(--ink-muted)] uppercase">
+                        Chapter {chapter.chapterNumber}
+                      </p>
+                      <p className="mt-1 text-sm font-semibold leading-tight">{chapter.title}</p>
+                    </button>
+                  );
+                })
               )}
             </div>
+          </aside>
 
-            <form className="rounded-lg border border-[var(--parchment-border)] bg-[var(--parchment-soft)] px-4 py-4 space-y-3" onSubmit={handleGenerateNextChapter}>
-              <p className="text-sm font-semibold">How should the next chapter go?</p>
+          <article className="parchment-card rounded-2xl p-4 shadow-lg sm:p-6">
+            <div className="mx-auto w-full max-w-4xl space-y-4">
+              <div className="rounded-lg border border-[var(--parchment-border)] bg-[var(--parchment-soft)] px-4 py-3">
+                <p className="text-sm font-semibold">{activeSession.libraryBook.title}</p>
+                <p className="mt-1 text-xs text-[var(--ink-muted)]">
+                  Session {activeSession.session.status} | Updated {formatDate(activeSession.session.updatedAt)}
+                </p>
+              </div>
 
-              {latestChapter && latestChapter.choiceOptions.length > 0 ? (
-                <div className="flex flex-wrap gap-2">
-                  {latestChapter.choiceOptions.map((choice) => (
+              {selectedChapter ? (
+                <>
+                  <article className="min-h-[55vh] rounded-xl border border-[var(--parchment-border)] bg-[var(--parchment-soft)] px-5 py-6 shadow-inner sm:px-7">
+                    <p className="text-xs tracking-[0.12em] text-[var(--ink-muted)] uppercase">
+                      Chapter {selectedChapter.chapterNumber}
+                    </p>
+                    <h3 className="mt-1 text-2xl font-semibold">{selectedChapter.title}</h3>
+                    <p className="mt-5 whitespace-pre-wrap text-base leading-8 text-[var(--ink)]">
+                      {currentPageText}
+                    </p>
+                  </article>
+
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        disabled={normalizedPageIndex === 0}
+                        onClick={() => {
+                          setSelectedPageIndex((index) => Math.max(index - 1, 0));
+                        }}
+                        className="rounded-full border border-[var(--parchment-border)] px-3 py-1.5 text-xs font-semibold text-[var(--ink)] transition hover:bg-white/65 disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        Previous Page
+                      </button>
+                      <button
+                        type="button"
+                        disabled={normalizedPageIndex >= selectedChapterPages.length - 1}
+                        onClick={() => {
+                          setSelectedPageIndex((index) =>
+                            Math.min(index + 1, Math.max(selectedChapterPages.length - 1, 0)),
+                          );
+                        }}
+                        className="rounded-full border border-[var(--parchment-border)] px-3 py-1.5 text-xs font-semibold text-[var(--ink)] transition hover:bg-white/65 disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        Next Page
+                      </button>
+                    </div>
+
+                    <p className="text-xs text-[var(--ink-muted)]">
+                      Page {selectedChapterPages.length > 0 ? normalizedPageIndex + 1 : 0} of{" "}
+                      {selectedChapterPages.length}
+                    </p>
+                  </div>
+
+                  <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-[var(--parchment-border)] bg-white/35 px-3 py-2">
                     <button
-                      key={choice}
                       type="button"
-                      onClick={() => setDirectionInput(choice)}
-                      className="rounded-full border border-[var(--parchment-border)] px-3 py-1.5 text-xs font-semibold text-[var(--ink)] transition hover:bg-white/65"
+                      disabled={selectedChapterIndex <= 0}
+                      onClick={() => {
+                        if (!activeSession || selectedChapterIndex <= 0) {
+                          return;
+                        }
+
+                        const previousChapter = activeSession.chapters[selectedChapterIndex - 1];
+                        setSelectedChapterId(previousChapter.id);
+                        setSelectedPageIndex(0);
+                      }}
+                      className="rounded-full border border-[var(--parchment-border)] px-3 py-1 text-xs font-semibold text-[var(--ink)] transition hover:bg-white/65 disabled:cursor-not-allowed disabled:opacity-60"
                     >
-                      {choice}
+                      Previous Chapter
                     </button>
-                  ))}
-                </div>
-              ) : null}
 
-              <textarea
-                value={directionInput}
-                onChange={(event) => setDirectionInput(event.target.value)}
-                placeholder="Type your own suggestion for the next chapter..."
-                className="parchment-input min-h-[96px] w-full rounded-lg px-3 py-2 text-sm outline-none"
-                maxLength={2500}
-                disabled={isGeneratingChapter || isLoadingSession}
-              />
+                    <p className="text-xs text-[var(--ink-muted)]">
+                      {isAtEndOfChapter
+                        ? "End of chapter reached."
+                        : "Turn pages to continue this chapter."}
+                    </p>
 
-              <button
-                type="submit"
-                disabled={isGeneratingChapter || isLoadingSession}
-                className="parchment-button rounded-full px-4 py-2 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-70"
-              >
-                {isGeneratingChapter
-                  ? "Generating Next Chapter..."
-                  : isLoadingSession
-                    ? "Loading..."
-                    : "Generate Next Chapter"}
-              </button>
-            </form>
-          </div>
-        </article>
+                    <button
+                      type="button"
+                      disabled={
+                        !activeSession ||
+                        selectedChapterIndex < 0 ||
+                        selectedChapterIndex >= activeSession.chapters.length - 1
+                      }
+                      onClick={() => {
+                        if (
+                          !activeSession ||
+                          selectedChapterIndex < 0 ||
+                          selectedChapterIndex >= activeSession.chapters.length - 1
+                        ) {
+                          return;
+                        }
+
+                        const nextChapter = activeSession.chapters[selectedChapterIndex + 1];
+                        setSelectedChapterId(nextChapter.id);
+                        setSelectedPageIndex(0);
+                      }}
+                      className="rounded-full border border-[var(--parchment-border)] px-3 py-1 text-xs font-semibold text-[var(--ink)] transition hover:bg-white/65 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      Next Chapter
+                    </button>
+                  </div>
+                </>
+              ) : (
+                <p className="rounded-lg border border-[var(--parchment-border)] bg-[var(--parchment-soft)] px-4 py-3 text-sm text-[var(--ink-muted)]">
+                  Generating first chapter...
+                </p>
+              )}
+            </div>
+          </article>
+        </section>
+
+        <form
+          className="rounded-lg border border-[var(--parchment-border)] bg-[var(--parchment-soft)] px-4 py-4 space-y-3"
+          onSubmit={handleGenerateNextChapter}
+        >
+          <p className="text-sm font-semibold">How should the next chapter go?</p>
+          <p className="text-xs text-[var(--ink-muted)]">
+            {!latestChapter
+              ? "Waiting for chapter 1..."
+              : !isLatestChapterSelected
+                ? "Select the latest chapter in the list to continue the book."
+                : !isAtEndOfChapter
+                  ? "Turn to the last page of this chapter to unlock generation."
+                  : "Ready. Choose a suggestion or write your own direction."}
+          </p>
+
+          {latestChapter && latestChapter.choiceOptions.length > 0 ? (
+            <div className="grid gap-2">
+              {latestChapter.choiceOptions.map((choice) => (
+                <button
+                  key={choice}
+                  type="button"
+                  onClick={() => setDirectionInput(choice)}
+                  className="w-full rounded-xl border border-[var(--parchment-border)] bg-white/45 px-4 py-3 text-left text-sm leading-6 font-medium text-[var(--ink)] transition hover:bg-white/70"
+                >
+                  {choice}
+                </button>
+              ))}
+            </div>
+          ) : null}
+
+          <textarea
+            value={directionInput}
+            onChange={(event) => setDirectionInput(event.target.value)}
+            placeholder="Type your own suggestion for the next chapter..."
+            className="parchment-input min-h-[96px] w-full rounded-lg px-3 py-2 text-sm outline-none"
+            maxLength={2500}
+            disabled={isGeneratingChapter || isLoadingSession}
+          />
+
+          <button
+            type="submit"
+            disabled={!canGenerateNextChapter}
+            className="parchment-button rounded-full px-4 py-2 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-70"
+          >
+            {isGeneratingChapter
+              ? "Generating Next Chapter..."
+              : isLoadingSession
+                ? "Loading..."
+                : !canGenerateNextChapter
+                  ? "Reach Chapter End To Continue"
+                  : "Generate Next Chapter"}
+          </button>
+        </form>
       </main>
     );
   }
@@ -553,37 +846,31 @@ export function LibraryReaderClient({
               sortedBooks.map((book) => (
                 <article
                   key={book.id}
-                  className="flex h-full flex-col justify-between rounded-lg border border-[var(--parchment-border)] bg-[var(--parchment-soft)] px-4 py-4"
+                  className="book-card book-card-library"
                 >
-                  <div>
-                    <div className="flex items-start justify-between gap-3">
-                      <div>
-                        <h4 className="text-lg font-semibold leading-tight">{book.title}</h4>
-                        <p className="mt-1 text-xs text-[var(--ink-muted)]">/{book.slug}</p>
-                      </div>
-                      <span className="rounded-full border border-[var(--parchment-border)] bg-white/45 px-2 py-0.5 text-xs text-[var(--ink-muted)]">
-                        {book.status}
-                      </span>
-                    </div>
-
-                    <p className="mt-3 text-sm leading-6 text-[var(--ink-muted)]">
+                  <div className="relative z-10">
+                    <p className="book-card-kicker">
+                      {book.authorName?.trim() || book.authorEmail}
+                    </p>
+                    <h4 className="book-card-title">{book.title}</h4>
+                    <p className="book-card-description">
                       {book.premise?.trim()
                         ? book.premise
                         : "No brief description yet. Start reading to build your chapter journey."}
                     </p>
                   </div>
-
-                  <div className="mt-4">
-                    <p className="text-xs text-[var(--ink-muted)]">
-                      Added {formatDate(book.addedAt)} | Chapters read {book.activeChapterCount}
-                    </p>
+                  <div className="relative z-10 mt-5 flex items-end justify-between gap-3">
+                    <span className="book-card-status">
+                      {book.activeSessionId ? "In progress" : "Ready to read"}
+                    </span>
                     <button
                       type="button"
                       disabled={Boolean(isStartingBookId)}
                       onClick={() => {
                         void handleStartReading(book.id);
                       }}
-                      className="parchment-button mt-3 rounded-full px-4 py-1.5 text-xs font-semibold disabled:cursor-not-allowed disabled:opacity-70"
+                      className="rounded-full border border-[rgba(248,239,219,0.55)] px-3 py-1.5 text-xs font-semibold text-[rgba(248,239,219,0.95)] transition hover:bg-[rgba(255,255,255,0.14)] disabled:cursor-not-allowed disabled:opacity-70"
+                      title={`Added ${formatDate(book.addedAt)} | Chapters read ${book.activeChapterCount}`}
                     >
                       {isStartingBookId === book.id
                         ? "Opening..."
@@ -609,27 +896,32 @@ export function LibraryReaderClient({
               catalogWorlds.map((world) => (
                 <article
                   key={world.id}
-                  className="flex h-full flex-col justify-between rounded-lg border border-[var(--parchment-border)] bg-[var(--parchment-soft)] px-4 py-4"
+                  className="book-card book-card-bookstore"
                 >
-                  <div>
-                    <p className="text-base font-semibold leading-tight">{world.title}</p>
-                    <p className="mt-1 text-xs text-[var(--ink-muted)]">/{world.slug}</p>
-                    <p className="mt-3 text-sm leading-6 text-[var(--ink-muted)]">
+                  <div className="relative z-10">
+                    <p className="book-card-kicker">
+                      {world.authorName?.trim() || world.authorEmail}
+                    </p>
+                    <p className="book-card-title">{world.title}</p>
+                    <p className="book-card-description">
                       {world.premise?.trim()
                         ? world.premise
                         : "No brief description provided yet."}
                     </p>
                   </div>
+                  <div className="relative z-10 mt-5 flex items-end justify-between gap-3">
+                    <span className="book-card-status">Available</span>
                   <button
                     type="button"
                     disabled={Boolean(isAddingWorldId)}
                     onClick={() => {
                       void handleAddToLibrary(world.id);
                     }}
-                    className="mt-3 rounded-full border border-[var(--parchment-border)] px-3 py-1.5 text-xs font-semibold text-[var(--ink)] transition hover:bg-white/65 disabled:cursor-not-allowed disabled:opacity-70"
+                    className="rounded-full border border-[rgba(248,239,219,0.55)] px-3 py-1.5 text-xs font-semibold text-[rgba(248,239,219,0.95)] transition hover:bg-[rgba(255,255,255,0.14)] disabled:cursor-not-allowed disabled:opacity-70"
                   >
                     {isAddingWorldId === world.id ? "Adding..." : "Add To Library"}
                   </button>
+                  </div>
                 </article>
               ))
             )}

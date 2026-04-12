@@ -22,6 +22,20 @@
       "when": 1775950786432,
       "tag": "0002_library_chapter_reader_flow",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1776039900000,
+      "tag": "0003_world_chapter_cap_and_author_editing",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1776009969797,
+      "tag": "0004_daily_red_wolf",
+      "breakpoints": true
     }
   ]
 }

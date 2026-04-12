@@ -34,6 +34,8 @@ export function resolveGeminiModel(override?: string) {
 export async function generateStoryText(options: {
   prompt: string;
   model?: string;
+  maxOutputTokens?: number;
+  temperature?: number;
 }) {
   const prompt = options.prompt.trim();
 
@@ -46,7 +48,33 @@ export async function generateStoryText(options: {
   const client = getClient();
 
   async function generateWithModel(modelName: string) {
-    const model = client.getGenerativeModel({ model: modelName });
+    const generationConfig: {
+      maxOutputTokens?: number;
+      temperature?: number;
+    } = {};
+
+    if (
+      typeof options.maxOutputTokens === "number" &&
+      Number.isFinite(options.maxOutputTokens) &&
+      options.maxOutputTokens > 0
+    ) {
+      generationConfig.maxOutputTokens = Math.trunc(options.maxOutputTokens);
+    }
+
+    if (
+      typeof options.temperature === "number" &&
+      Number.isFinite(options.temperature) &&
+      options.temperature >= 0
+    ) {
+      generationConfig.temperature = options.temperature;
+    }
+
+    const model = client.getGenerativeModel({
+      model: modelName,
+      ...(Object.keys(generationConfig).length > 0
+        ? { generationConfig }
+        : {}),
+    });
     const result = await model.generateContent(prompt);
     const text = result.response.text().trim();
 

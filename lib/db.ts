@@ -53,6 +53,7 @@ async function initializeSchema() {
       title TEXT NOT NULL,
       slug TEXT NOT NULL,
       premise TEXT,
+      chapter_cap INTEGER CHECK (chapter_cap IS NULL OR chapter_cap BETWEEN 1 AND 500),
       reader_agency TEXT,
       ai_directive TEXT,
       status TEXT NOT NULL DEFAULT 'DRAFT' CHECK (status IN ('DRAFT', 'PUBLISHED', 'ARCHIVED')),
@@ -124,6 +125,21 @@ async function initializeSchema() {
       ADD COLUMN IF NOT EXISTS chapter_title TEXT;
     ALTER TABLE story_turns
       ADD COLUMN IF NOT EXISTS choice_options TEXT NOT NULL DEFAULT '[]';
+    ALTER TABLE story_worlds
+      ADD COLUMN IF NOT EXISTS chapter_cap INTEGER;
+
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conname = 'story_worlds_chapter_cap_chk'
+      ) THEN
+        ALTER TABLE story_worlds
+        ADD CONSTRAINT story_worlds_chapter_cap_chk
+        CHECK (chapter_cap IS NULL OR chapter_cap BETWEEN 1 AND 500);
+      END IF;
+    END $$;
 
     CREATE UNIQUE INDEX IF NOT EXISTS users_email_unique_idx ON users(email);
     CREATE UNIQUE INDEX IF NOT EXISTS story_worlds_slug_unique_idx ON story_worlds(slug);

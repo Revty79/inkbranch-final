@@ -13,6 +13,7 @@ export type LibraryBook = {
   title: string;
   slug: string;
   premise: string | null;
+  chapterCap: number | null;
   status: "DRAFT" | "PUBLISHED" | "ARCHIVED";
   authorName: string | null;
   authorEmail: string;
@@ -30,6 +31,17 @@ export type CatalogWorld = {
   status: "DRAFT" | "PUBLISHED" | "ARCHIVED";
   authorName: string | null;
   authorEmail: string;
+};
+
+export type BookstoreBook = {
+  id: string;
+  title: string;
+  slug: string;
+  premise: string | null;
+  status: "DRAFT" | "PUBLISHED" | "ARCHIVED";
+  authorName: string | null;
+  authorEmail: string;
+  inLibrary: boolean;
 };
 
 export type ReaderSessionSummary = {
@@ -82,6 +94,7 @@ type LibraryBookRow = {
   title: string;
   slug: string;
   premise: string | null;
+  chapter_cap: number | string | null;
   status: "DRAFT" | "PUBLISHED" | "ARCHIVED";
   author_name: string | null;
   author_email: string;
@@ -99,6 +112,10 @@ type CatalogWorldRow = {
   status: "DRAFT" | "PUBLISHED" | "ARCHIVED";
   author_name: string | null;
   author_email: string;
+};
+
+type BookstoreBookRow = CatalogWorldRow & {
+  in_library: boolean;
 };
 
 type SessionSummaryRow = {
@@ -123,6 +140,7 @@ type SessionCoreRow = {
   world_slug: string;
   world_status: "DRAFT" | "PUBLISHED" | "ARCHIVED";
   world_premise: string | null;
+  world_chapter_cap: number | string | null;
   reader_agency: string | null;
   ai_directive: string | null;
   author_name: string | null;
@@ -156,11 +174,73 @@ type ChapterRow = {
   created_at: Date | string;
 };
 
+type ParsedChapterOutput = {
+  chapterTitle: string;
+  chapterBody: string;
+  choiceOptions: string[];
+  didParseJson: boolean;
+};
+
+type ChoiceContext = {
+  chapterTitle?: string;
+  chapterBody?: string;
+  directionInput?: string;
+};
+
+type ChapterGenerationProfile = {
+  historyChapters: number;
+  chapterSummaryChars: number;
+  targetWordsMin: number;
+  targetWordsMax: number;
+  generationAttempts: number;
+  maxOutputTokens: number;
+  temperature: number;
+};
+
 const MAX_DIRECTION_LENGTH = 2500;
-const MAX_CHAPTER_HISTORY_IN_PROMPT = 8;
-const CHAPTER_TARGET_WORDS_MIN = 1800;
-const CHAPTER_TARGET_WORDS_MAX = 3200;
-const CHAPTER_GENERATION_ATTEMPTS = 3;
+const DEFAULT_CHAPTER_GENERATION_PROFILE = "BALANCED";
+const CHAPTER_GENERATION_PROFILES: Record<string, ChapterGenerationProfile> = {
+  FAST: {
+    historyChapters: 3,
+    chapterSummaryChars: 1000,
+    targetWordsMin: 1700,
+    targetWordsMax: 2400,
+    generationAttempts: 3,
+    maxOutputTokens: 4300,
+    temperature: 0.8,
+  },
+  BALANCED: {
+    historyChapters: 4,
+    chapterSummaryChars: 1300,
+    targetWordsMin: 2400,
+    targetWordsMax: 3400,
+    generationAttempts: 3,
+    maxOutputTokens: 6200,
+    temperature: 0.85,
+  },
+  RICH: {
+    historyChapters: 6,
+    chapterSummaryChars: 1600,
+    targetWordsMin: 3000,
+    targetWordsMax: 4600,
+    generationAttempts: 4,
+    maxOutputTokens: 7600,
+    temperature: 0.9,
+  },
+};
+const SHORT_CHAPTER_RECOVERY_ATTEMPTS = 3;
+const ABSOLUTE_MIN_CHAPTER_WORDS = 1600;
+const CHOICE_MIN_SENTENCES = 2;
+const CHOICE_MAX_SENTENCES = 3;
+const CHOICE_MIN_WORDS = 16;
+const CHOICE_MAX_WORDS = 110;
+const CHOICE_META_ARTIFACT_PATTERNS = [
+  /\bopen chapter\s*\d+\b/i,
+  /\bstrong hook\b/i,
+  /\bclear momentum\b/i,
+  /\bcontinue naturally(?: from the previous chapter)?\b/i,
+  /\breader direction\b/i,
+];
 
 function toNumber(value: number | string | null | undefined) {
   if (typeof value === "number") {
@@ -174,6 +254,15 @@ function toNumber(value: number | string | null | undefined) {
   return 0;
 }
 
+function toNullableNumber(value: number | string | null | undefined) {
+  if (value == null) {
+    return null;
+  }
+
+  const parsed = toNumber(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
 function safeParseChoiceOptions(input: string | null | undefined): string[] {
   if (!input) {
     return [];
@@ -185,7 +274,7 @@ function safeParseChoiceOptions(input: string | null | undefined): string[] {
     if (Array.isArray(parsed)) {
       return parsed
         .filter((item): item is string => typeof item === "string")
-        .map((item) => item.trim())
+        .map((item) => normalizeChoice(item))
         .filter(Boolean)
         .slice(0, 3);
     }
@@ -210,6 +299,438 @@ function countWords(input: string) {
   return trimmed.split(/\s+/).length;
 }
 
+function countSentences(input: string) {
+  const normalized = normalizeChoice(input);
+
+  if (!normalized) {
+    return 0;
+  }
+
+  const matches = normalized.match(/[^.!?]+[.!?]+(?=\s|$)/g);
+
+  if (matches?.length) {
+    return matches.length;
+  }
+
+  return 1;
+}
+
+function resolveChapterGenerationProfile(): ChapterGenerationProfile {
+  const profileName = (
+    process.env.READER_CHAPTER_GENERATION_PROFILE?.trim() ||
+    DEFAULT_CHAPTER_GENERATION_PROFILE
+  ).toUpperCase();
+
+  return CHAPTER_GENERATION_PROFILES[profileName] ?? CHAPTER_GENERATION_PROFILES.FAST;
+}
+
+function resolveMinimumAcceptedChapterWords(profile: ChapterGenerationProfile) {
+  const configuredFloorRaw = process.env.READER_CHAPTER_MIN_WORDS?.trim() || "";
+  const configuredFloor = Number.parseInt(configuredFloorRaw, 10);
+  const envFloor =
+    Number.isFinite(configuredFloor) && configuredFloor > 0
+      ? configuredFloor
+      : ABSOLUTE_MIN_CHAPTER_WORDS;
+
+  // Allow slight variance from target while still preventing under-delivered chapters.
+  const profileFloor = Math.floor(profile.targetWordsMin * 0.9);
+
+  return Math.max(envFloor, profileFloor);
+}
+
+function summarizeForPrompt(input: string, maxChars: number) {
+  const normalized = normalizeChapterBody(input).replace(/\s+/g, " ").trim();
+
+  if (!normalized) {
+    return "(empty chapter)";
+  }
+
+  if (normalized.length <= maxChars) {
+    return normalized;
+  }
+
+  const headLength = Math.max(Math.floor(maxChars * 0.72), 120);
+  const tailLength = Math.max(Math.floor(maxChars * 0.2), 60);
+  const head = normalized.slice(0, headLength).trimEnd();
+  const tail = normalized.slice(-tailLength).trimStart();
+
+  return `${head} ... ${tail}`;
+}
+
+function hasLikelyAbruptEnding(input: string) {
+  const normalized = normalizeChapterBody(input);
+
+  if (!normalized) {
+    return true;
+  }
+
+  const lastChar = normalized.at(-1) ?? "";
+
+  if (/[.!?'"\)\]]/.test(lastChar)) {
+    return false;
+  }
+
+  const wordCount = countWords(normalized);
+  return wordCount < 1400;
+}
+
+function normalizeChapterBody(input: string) {
+  const trimmed = input.trim();
+
+  if (!trimmed) {
+    return "";
+  }
+
+  const normalizedNewlines = trimmed
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n")
+    .trim();
+
+  const withUnescapedNewlines =
+    normalizedNewlines.includes("\\n") && !normalizedNewlines.includes("\n")
+      ? normalizedNewlines.replace(/\\n/g, "\n")
+      : normalizedNewlines;
+
+  return withUnescapedNewlines
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function stripCodeContainer(input: string) {
+  return input
+    .trim()
+    .replace(/^```(?:json|markdown|md|text)?\s*/i, "")
+    .replace(/```$/i, "")
+    .replace(/^<pre[^>]*>\s*<code[^>]*>/i, "")
+    .replace(/<\/code>\s*<\/pre>$/i, "")
+    .replace(/^<code[^>]*>/i, "")
+    .replace(/<\/code>$/i, "")
+    .trim();
+}
+
+function decodeEscapedJsonText(input: string) {
+  return input
+    .replace(/\\u([0-9a-fA-F]{4})/g, (_, hex: string) =>
+      String.fromCharCode(Number.parseInt(hex, 16)),
+    )
+    .replace(/\\"/g, "\"")
+    .replace(/\\\\/g, "\\")
+    .replace(/\\n/g, "\n")
+    .replace(/\\r/g, "\r")
+    .replace(/\\t/g, "\t");
+}
+
+function normalizeChoice(choice: string) {
+  return choice
+    .replace(/^[-*]\s+/, "")
+    .replace(/^\d+[.)]\s+/, "")
+    .replace(/^["'`]+|["'`]+$/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function formatChoicePrompt(choice: string) {
+  const normalized = normalizeChoice(choice);
+
+  if (!normalized) {
+    return "";
+  }
+
+  const withLeadingCapital = normalized.charAt(0).toUpperCase() + normalized.slice(1);
+
+  if (/[.!?]$/.test(withLeadingCapital)) {
+    return withLeadingCapital;
+  }
+
+  return `${withLeadingCapital}.`;
+}
+
+function isGenericChoice(choice: string) {
+  const normalized = normalizeChoice(choice).toLowerCase();
+
+  if (!normalized) {
+    return true;
+  }
+
+  const genericPhrases = [
+    "continue the story",
+    "continue on",
+    "keep going",
+    "what happens next",
+    "find out what happens",
+    "learn more",
+    "see what happens",
+    "continue naturally",
+  ];
+
+  return genericPhrases.some((phrase) => normalized.includes(phrase));
+}
+
+function containsChoiceMetaArtifact(input: string) {
+  const normalized = normalizeChoice(input);
+
+  if (!normalized) {
+    return false;
+  }
+
+  return CHOICE_META_ARTIFACT_PATTERNS.some((pattern) => pattern.test(normalized));
+}
+
+function clipChoiceFocus(input: string, maxWords: number) {
+  const normalized = normalizeChoice(input)
+    .replace(/[.!?]+$/g, "")
+    .trim();
+
+  if (!normalized) {
+    return "";
+  }
+
+  return normalized
+    .split(/\s+/)
+    .slice(0, maxWords)
+    .join(" ")
+    .trim();
+}
+
+function toChoiceFocusCandidate(input: string, maxChars: number) {
+  const summary = summarizeForPrompt(input, maxChars).replace(/[.!?]+$/g, "").trim();
+
+  if (!summary || countWords(summary) < 3) {
+    return "";
+  }
+
+  if (isGenericChoice(summary) || containsChoiceMetaArtifact(summary)) {
+    return "";
+  }
+
+  return summary;
+}
+
+function isLowQualityChoice(choice: string) {
+  const normalized = normalizeChoice(choice);
+
+  if (!normalized) {
+    return true;
+  }
+
+  const sentenceCount = countSentences(normalized);
+  const wordCount = countWords(normalized);
+
+  if (sentenceCount < CHOICE_MIN_SENTENCES || sentenceCount > CHOICE_MAX_SENTENCES) {
+    return true;
+  }
+
+  if (wordCount < CHOICE_MIN_WORDS || wordCount > CHOICE_MAX_WORDS) {
+    return true;
+  }
+
+  if (isGenericChoice(normalized)) {
+    return true;
+  }
+
+  if (containsChoiceMetaArtifact(normalized)) {
+    return true;
+  }
+
+  if (!/[a-zA-Z]/.test(normalized)) {
+    return true;
+  }
+
+  return false;
+}
+
+function getChoiceFocus(context?: ChoiceContext) {
+  const chapterTitle = context?.chapterTitle?.trim() || "";
+  const chapterBody = context?.chapterBody?.trim() || "";
+  const direction = context?.directionInput?.trim() || "";
+
+  if (chapterTitle && !/^chapter\s+\d+/i.test(chapterTitle)) {
+    const titleFocus = toChoiceFocusCandidate(chapterTitle, 70);
+
+    if (titleFocus) {
+      return titleFocus;
+    }
+  }
+
+  if (chapterBody) {
+    const candidateSentences = normalizeChapterBody(chapterBody)
+      .split(/(?<=[.!?])\s+/)
+      .map((sentence) => sentence.trim())
+      .filter(Boolean)
+      .slice(0, 3);
+
+    for (const sentence of candidateSentences) {
+      const sentenceFocus = toChoiceFocusCandidate(sentence, 90);
+
+      if (sentenceFocus) {
+        return sentenceFocus;
+      }
+    }
+  }
+
+  if (direction && countWords(direction) >= 4 && !/^continue\b/i.test(direction)) {
+    const directionFocus = toChoiceFocusCandidate(direction, 70);
+
+    if (directionFocus) {
+      return directionFocus;
+    }
+  }
+
+  return "the rising conflict at the heart of the story";
+}
+
+function buildFallbackChoices(chapterNumber: number, context?: ChoiceContext) {
+  const focus = clipChoiceFocus(getChoiceFocus(context), 7) || "the central threat";
+  const nextChapterNumber = chapterNumber + 1;
+
+  return [
+    `Escalate directly around ${focus} before the opposition can regroup and fortify. The move may secure a crucial advantage, but it will place one trusted ally in immediate danger.`,
+    `Investigate the hidden truth behind ${focus} through a covert and risky approach. If the lead is real you gain leverage, but if it is bait you walk into a deliberate trap.`,
+    `Force a public decision tied to ${focus} instead of waiting for perfect certainty. The fallout could fracture existing alliances and define the central stakes of chapter ${nextChapterNumber}.`,
+  ].map((choice) => formatChoicePrompt(choice));
+}
+
+function finalizeChoiceOptions(
+  choices: string[],
+  chapterNumber: number,
+  context?: ChoiceContext,
+) {
+  const selected: string[] = [];
+  const seen = new Set<string>();
+
+  for (const rawChoice of choices) {
+    const formatted = formatChoicePrompt(rawChoice);
+    const key = formatted.toLowerCase();
+
+    if (!formatted || seen.has(key) || isLowQualityChoice(formatted)) {
+      continue;
+    }
+
+    seen.add(key);
+    selected.push(formatted);
+
+    if (selected.length === 3) {
+      return selected;
+    }
+  }
+
+  const fallback = buildFallbackChoices(chapterNumber, context);
+
+  for (const rawChoice of fallback) {
+    const formatted = formatChoicePrompt(rawChoice);
+    const key = formatted.toLowerCase();
+
+    if (!formatted || seen.has(key) || isLowQualityChoice(formatted)) {
+      continue;
+    }
+
+    seen.add(key);
+    selected.push(formatted);
+
+    if (selected.length === 3) {
+      break;
+    }
+  }
+
+  const emergencyFallbackChoices = [
+    "Force a direct confrontation that answers one mystery and exposes a deeper threat. The outcome will settle one conflict now, but it will ignite a harder problem immediately after.",
+    "Pursue the most dangerous lead before a rival can seize it and rewrite events. You might uncover decisive evidence, or you might trigger a trap that isolates your side.",
+    `Make a costly strategic choice now rather than deferring the decision to chance. That commitment will reshape your position and set the stakes for chapter ${chapterNumber + 1}.`,
+  ];
+
+  for (const rawChoice of emergencyFallbackChoices) {
+    if (selected.length === 3) {
+      break;
+    }
+
+    const formatted = formatChoicePrompt(rawChoice);
+    const key = formatted.toLowerCase();
+
+    if (!formatted || seen.has(key) || isLowQualityChoice(formatted)) {
+      continue;
+    }
+
+    seen.add(key);
+    selected.push(formatted);
+  }
+
+  return selected.slice(0, 3);
+}
+
+function tryParseJsonObject(raw: string) {
+  const cleaned = stripCodeContainer(raw);
+  const candidates = [cleaned];
+  const firstBrace = cleaned.indexOf("{");
+  const lastBrace = cleaned.lastIndexOf("}");
+
+  if (firstBrace >= 0 && lastBrace > firstBrace) {
+    const sliced = cleaned.slice(firstBrace, lastBrace + 1);
+
+    if (sliced !== cleaned) {
+      candidates.push(sliced);
+    }
+  }
+
+  for (const candidate of candidates) {
+    try {
+      const parsed = JSON.parse(candidate) as unknown;
+
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        return parsed as {
+          chapterTitle?: unknown;
+          chapterBody?: unknown;
+          choices?: unknown;
+        };
+      }
+    } catch {
+      continue;
+    }
+  }
+
+  return null;
+}
+
+function tryRecoverMalformedJsonOutput(
+  raw: string,
+  chapterNumber: number,
+  context?: ChoiceContext,
+): ParsedChapterOutput | null {
+  const cleaned = stripCodeContainer(raw);
+  const chapterTitleMatch = cleaned.match(/"chapterTitle"\s*:\s*"((?:\\.|[^"])*)"/i);
+  const chapterBodyMatch =
+    cleaned.match(/"chapterBody"\s*:\s*"([\s\S]*?)"\s*,\s*"choices"\s*:/i) ??
+    cleaned.match(/"chapterBody"\s*:\s*"([\s\S]*)$/i);
+
+  if (!chapterBodyMatch) {
+    return null;
+  }
+
+  const chapterTitle = chapterTitleMatch
+    ? normalizeChapterBody(decodeEscapedJsonText(chapterTitleMatch[1])).slice(0, 180)
+    : `Chapter ${chapterNumber}`;
+  const chapterBody = normalizeChapterBody(decodeEscapedJsonText(chapterBodyMatch[1]));
+
+  const choicesBlockMatch = cleaned.match(/"choices"\s*:\s*\[([\s\S]*?)\]/i);
+  const choiceOptions =
+    choicesBlockMatch
+      ? [...choicesBlockMatch[1].matchAll(/"((?:\\.|[^"])*)"/g)]
+          .map((match) => normalizeChoice(decodeEscapedJsonText(match[1])))
+          .filter(Boolean)
+          .slice(0, 3)
+      : [];
+
+  return {
+    chapterTitle: chapterTitle || `Chapter ${chapterNumber}`,
+    chapterBody,
+    choiceOptions: finalizeChoiceOptions(choiceOptions, chapterNumber, {
+      ...context,
+      chapterTitle: chapterTitle || context?.chapterTitle,
+      chapterBody: chapterBody || context?.chapterBody,
+    }),
+    didParseJson: true,
+  };
+}
+
 function isWorldReadableFor(role: AppRole, userId: string, world: { status: string; authorId: string }) {
   if (role === "ADMIN") {
     return true;
@@ -222,14 +743,6 @@ function isWorldReadableFor(role: AppRole, userId: string, world: { status: stri
   return world.status === "PUBLISHED";
 }
 
-function buildFallbackChoices(chapterNumber: number) {
-  return [
-    "Press deeper into the current conflict.",
-    "Step back and investigate hidden context.",
-    `Take a risky turn that could change chapter ${chapterNumber + 1}.`,
-  ];
-}
-
 function toLibraryBook(row: LibraryBookRow): LibraryBook {
   return {
     id: row.library_book_id,
@@ -237,6 +750,7 @@ function toLibraryBook(row: LibraryBookRow): LibraryBook {
     title: row.title,
     slug: row.slug,
     premise: row.premise,
+    chapterCap: toNullableNumber(row.chapter_cap),
     status: row.status,
     authorName: row.author_name,
     authorEmail: row.author_email,
@@ -251,8 +765,9 @@ function buildChapterPrompt(
   detail: ReaderSessionDetail,
   chapterNumber: number,
   directionInput: string,
+  profile: ChapterGenerationProfile,
 ) {
-  const recentChapters = detail.chapters.slice(-MAX_CHAPTER_HISTORY_IN_PROMPT);
+  const recentChapters = detail.chapters.slice(-profile.historyChapters);
 
   const sections = [
     "You are the InkBranch chapter writer.",
@@ -265,6 +780,9 @@ function buildChapterPrompt(
     "",
     `World: ${detail.libraryBook.title}`,
     detail.libraryBook.premise ? `Premise: ${detail.libraryBook.premise}` : null,
+    detail.libraryBook.chapterCap
+      ? `Chapter cap: ${detail.libraryBook.chapterCap}`
+      : "Chapter cap: none",
     detail.spine.arcStatement ? `Arc statement: ${detail.spine.arcStatement}` : null,
     detail.spine.toneGuide ? `Tone guide: ${detail.spine.toneGuide}` : null,
     detail.spine.narrativeBoundaries
@@ -303,19 +821,31 @@ function buildChapterPrompt(
       ? recentChapters.flatMap((chapter) => [
           `Chapter ${chapter.chapterNumber} title: ${chapter.title}`,
           `Chapter ${chapter.chapterNumber} direction: ${chapter.directionInput}`,
-          `Chapter ${chapter.chapterNumber} content: ${chapter.content}`,
+          `Chapter ${chapter.chapterNumber} summary: ${summarizeForPrompt(chapter.content, profile.chapterSummaryChars)}`,
+          chapter.choiceOptions.length
+            ? `Chapter ${chapter.chapterNumber} choices offered: ${chapter.choiceOptions.join(" | ")}`
+            : null,
         ])
       : ["No prior chapters yet."]),
     "",
     `Target chapter number: ${chapterNumber}`,
+    detail.libraryBook.chapterCap
+      ? `You are writing chapter ${chapterNumber} of ${detail.libraryBook.chapterCap}.`
+      : null,
     `Reader direction for this chapter: ${directionInput}`,
     "",
     "Requirements:",
-    `- chapterBody must be ${CHAPTER_TARGET_WORDS_MIN} to ${CHAPTER_TARGET_WORDS_MAX} words.`,
+    `- chapterBody must be ${profile.targetWordsMin} to ${profile.targetWordsMax} words.`,
     "- chapterBody should read like a real novel chapter with multiple scene beats.",
+    "- Deliver substantial progression so the chapter feels satisfying to read, not like a brief scene.",
     "- Use natural sectioning and pacing; do not force a fixed paragraph count.",
     "- choices must contain exactly 3 concise options for the next chapter.",
+    "- Each choice must be 2-3 complete sentences and specific to the chapter's events.",
+    "- Each choice should be roughly 16-110 words, concrete, and immediately actionable.",
+    "- Every choice must reference the chapter's concrete stakes, conflict, or revelation.",
+    "- Avoid generic choices like 'continue' or 'see what happens'.",
     "- Keep chapter progression meaningful and coherent.",
+    "- Do not wrap output in markdown fences or HTML tags such as <code>.",
   ];
 
   return sections.filter((part): part is string => Boolean(part)).join("\n");
@@ -327,6 +857,7 @@ function buildChapterExpansionPrompt(options: {
   currentTitle: string;
   currentBody: string;
   currentChoices: string[];
+  profile: ChapterGenerationProfile;
 }) {
   return [
     "Revise and expand this chapter draft.",
@@ -344,64 +875,76 @@ function buildChapterExpansionPrompt(options: {
     ...options.currentChoices.map((choice) => `- ${choice}`),
     "",
     "Requirements:",
-    `- Expand chapterBody to ${CHAPTER_TARGET_WORDS_MIN} to ${CHAPTER_TARGET_WORDS_MAX} words.`,
+    `- Expand chapterBody to ${options.profile.targetWordsMin} to ${options.profile.targetWordsMax} words.`,
     "- Ensure the expanded chapter feels like a full novel chapter, not a short scene.",
+    "- Add meaningful progression, escalation, and consequence so chapter length feels earned.",
     "- Keep continuity and core events from the current draft.",
     "- Keep prose quality high and avoid repetition.",
     "- Return exactly 3 strong next-chapter choices.",
+    "- Each choice must be 2-3 complete sentences and grounded in chapter stakes.",
+    "- Choices should be roughly 16-110 words, specific, and actionable (no vague filler).",
+    "- Do not wrap output in markdown fences or HTML tags such as <code>.",
   ].join("\n");
 }
 
-function parseChapterOutput(raw: string, chapterNumber: number) {
-  const trimmed = raw.trim();
-  const withoutFences = trimmed
-    .replace(/^```json\s*/i, "")
-    .replace(/^```\s*/i, "")
-    .replace(/```$/i, "")
-    .trim();
+function parseChapterOutput(
+  raw: string,
+  chapterNumber: number,
+  context?: ChoiceContext,
+) {
+  const parsed = tryParseJsonObject(raw);
 
-  try {
-    const parsed = JSON.parse(withoutFences) as {
-      chapterTitle?: unknown;
-      chapterBody?: unknown;
-      choices?: unknown;
-    };
-
+  if (parsed) {
     const chapterTitle =
       typeof parsed.chapterTitle === "string" && parsed.chapterTitle.trim()
-        ? parsed.chapterTitle.trim().slice(0, 180)
+        ? normalizeChapterBody(parsed.chapterTitle).slice(0, 180)
         : `Chapter ${chapterNumber}`;
 
     const chapterBody =
       typeof parsed.chapterBody === "string" && parsed.chapterBody.trim()
-        ? parsed.chapterBody.trim()
-        : trimmed;
+        ? normalizeChapterBody(parsed.chapterBody)
+        : normalizeChapterBody(raw);
 
     const parsedChoices = Array.isArray(parsed.choices)
       ? parsed.choices
           .filter((item): item is string => typeof item === "string")
-          .map((item) => item.trim())
+          .map((item) => normalizeChoice(item))
           .filter(Boolean)
           .slice(0, 3)
       : [];
 
-    const choiceOptions =
-      parsedChoices.length >= 3
-        ? parsedChoices
-        : [...parsedChoices, ...buildFallbackChoices(chapterNumber)].slice(0, 3);
+    const choiceOptions = finalizeChoiceOptions(parsedChoices, chapterNumber, {
+      ...context,
+      chapterTitle,
+      chapterBody,
+    });
 
     return {
       chapterTitle,
       chapterBody,
       choiceOptions,
-    };
-  } catch {
-    return {
-      chapterTitle: `Chapter ${chapterNumber}`,
-      chapterBody: trimmed,
-      choiceOptions: buildFallbackChoices(chapterNumber),
-    };
+      didParseJson: true,
+    } satisfies ParsedChapterOutput;
   }
+
+  const recovered = tryRecoverMalformedJsonOutput(raw, chapterNumber, context);
+
+  if (recovered) {
+    return recovered;
+  }
+
+  const fallbackChapterBody = normalizeChapterBody(stripCodeContainer(raw));
+
+  return {
+    chapterTitle: `Chapter ${chapterNumber}`,
+    chapterBody: fallbackChapterBody,
+    choiceOptions: finalizeChoiceOptions([], chapterNumber, {
+      ...context,
+      chapterTitle: context?.chapterTitle || `Chapter ${chapterNumber}`,
+      chapterBody: fallbackChapterBody || context?.chapterBody,
+    }),
+    didParseJson: false,
+  } satisfies ParsedChapterOutput;
 }
 
 export async function listLibraryBooks(user: PublicUser): Promise<LibraryBook[]> {
@@ -414,6 +957,7 @@ export async function listLibraryBooks(user: PublicUser): Promise<LibraryBook[]>
         worlds.title,
         worlds.slug,
         worlds.premise,
+        worlds.chapter_cap,
         worlds.status,
         authors.name AS author_name,
         authors.email AS author_email,
@@ -490,6 +1034,47 @@ export async function listLibraryCatalogWorlds(user: PublicUser): Promise<Catalo
     status: row.status,
     authorName: row.author_name,
     authorEmail: row.author_email,
+  }));
+}
+
+export async function listBookstoreBooks(user: PublicUser): Promise<BookstoreBook[]> {
+  const db = await getDatabase();
+  const result = await db.query<BookstoreBookRow>(
+    `
+      SELECT
+        worlds.id,
+        worlds.title,
+        worlds.slug,
+        worlds.premise,
+        worlds.status,
+        authors.name AS author_name,
+        authors.email AS author_email,
+        CASE WHEN lb.id IS NULL THEN FALSE ELSE TRUE END AS in_library
+      FROM story_worlds AS worlds
+      JOIN users AS authors
+        ON authors.id = worlds.author_id
+      LEFT JOIN library_books AS lb
+        ON lb.world_id = worlds.id
+       AND lb.user_id = $2
+      WHERE (
+        $1 = 'ADMIN'
+        OR ($1 = 'AUTHOR' AND (worlds.status = 'PUBLISHED' OR worlds.author_id = $2))
+        OR ($1 = 'READER' AND worlds.status = 'PUBLISHED')
+      )
+      ORDER BY worlds.updated_at DESC
+    `,
+    [user.role, user.id],
+  );
+
+  return result.rows.map((row) => ({
+    id: row.id,
+    title: row.title,
+    slug: row.slug,
+    premise: row.premise,
+    status: row.status,
+    authorName: row.author_name,
+    authorEmail: row.author_email,
+    inLibrary: row.in_library,
   }));
 }
 
@@ -612,6 +1197,7 @@ export async function getReaderSessionDetail(
         worlds.slug AS world_slug,
         worlds.status AS world_status,
         worlds.premise AS world_premise,
+        worlds.chapter_cap AS world_chapter_cap,
         worlds.reader_agency,
         worlds.ai_directive,
         authors.name AS author_name,
@@ -705,14 +1291,29 @@ export async function getReaderSessionDetail(
 
   const chapters = chaptersResult.rows.map((chapter) => {
     const chapterNumber = toNumber(chapter.turn_index);
+    const parsedOutput = parseChapterOutput(chapter.ai_response, chapterNumber, {
+      chapterTitle: chapter.chapter_title || undefined,
+      directionInput: chapter.reader_input,
+    });
+    const storedChoiceOptions = safeParseChoiceOptions(chapter.choice_options);
+    const choiceOptions = finalizeChoiceOptions(
+      storedChoiceOptions.length >= 3 ? storedChoiceOptions : parsedOutput.choiceOptions,
+      chapterNumber,
+      {
+        chapterTitle: parsedOutput.chapterTitle || chapter.chapter_title || undefined,
+        chapterBody: parsedOutput.chapterBody,
+        directionInput: chapter.reader_input,
+      },
+    );
+    const fallbackTitle = parsedOutput.chapterTitle || `Chapter ${chapterNumber}`;
 
     return {
       id: chapter.id,
       chapterNumber,
-      title: chapter.chapter_title?.trim() || `Chapter ${chapterNumber}`,
-      content: chapter.ai_response,
+      title: chapter.chapter_title?.trim() || fallbackTitle,
+      content: parsedOutput.chapterBody,
       directionInput: chapter.reader_input,
-      choiceOptions: safeParseChoiceOptions(chapter.choice_options),
+      choiceOptions,
       model: chapter.model,
       createdAt: new Date(chapter.created_at).toISOString(),
     } satisfies ReaderChapter;
@@ -736,6 +1337,7 @@ export async function getReaderSessionDetail(
     title: core.world_title,
     slug: core.world_slug,
     premise: core.world_premise,
+    chapterCap: toNullableNumber(core.world_chapter_cap),
     status: core.world_status,
     authorName: core.author_name,
     authorEmail: core.author_email,
@@ -862,6 +1464,24 @@ async function insertChapterTurn(options: {
     await db.query("ROLLBACK").catch(() => undefined);
     throw error;
   }
+}
+
+async function markSessionCompleted(sessionId: string) {
+  const db = await getDatabase();
+  const nowIso = new Date().toISOString();
+
+  await db.query(
+    `
+      UPDATE story_sessions
+      SET
+        status = 'COMPLETED',
+        completed_at = COALESCE(completed_at, $2),
+        updated_at = $2
+      WHERE id = $1
+        AND status = 'ACTIVE'
+    `,
+    [sessionId, nowIso],
+  );
 }
 
 export async function startReadingFromLibrary(user: PublicUser, libraryBookId: string) {
@@ -997,6 +1617,17 @@ export async function generateNextChapter(options: {
     throw new Error("This reading session is no longer active.");
   }
 
+  const chapterCap = detail.libraryBook.chapterCap;
+  const generationProfile = resolveChapterGenerationProfile();
+  const minimumAcceptedWords = resolveMinimumAcceptedChapterWords(generationProfile);
+
+  if (chapterCap && detail.chapters.length >= chapterCap) {
+    await markSessionCompleted(options.sessionId);
+    throw new Error(
+      `This book has reached its chapter cap of ${chapterCap} chapters. Session completed.`,
+    );
+  }
+
   const chapterNumber = detail.chapters.length + 1;
   let parsed = {
     chapterTitle: `Chapter ${chapterNumber}`,
@@ -1004,30 +1635,85 @@ export async function generateNextChapter(options: {
     choiceOptions: buildFallbackChoices(chapterNumber),
   };
   let modelUsed = options.model ?? "";
+  let chapterWordCount = 0;
 
-  for (let attempt = 1; attempt <= CHAPTER_GENERATION_ATTEMPTS; attempt += 1) {
+  for (
+    let attempt = 1;
+    attempt <= generationProfile.generationAttempts;
+    attempt += 1
+  ) {
     const prompt =
       attempt === 1
-        ? buildChapterPrompt(detail, chapterNumber, direction)
+        ? buildChapterPrompt(detail, chapterNumber, direction, generationProfile)
         : buildChapterExpansionPrompt({
             chapterNumber,
             directionInput: direction,
             currentTitle: parsed.chapterTitle,
             currentBody: parsed.chapterBody,
             currentChoices: parsed.choiceOptions,
+            profile: generationProfile,
           });
 
     const generated = await generateStoryText({
       prompt,
       model: options.model,
+      maxOutputTokens: generationProfile.maxOutputTokens,
+      temperature: generationProfile.temperature,
     });
 
-    parsed = parseChapterOutput(generated.text, chapterNumber);
+    parsed = parseChapterOutput(generated.text, chapterNumber, {
+      directionInput: direction,
+    });
     modelUsed = generated.model;
+    chapterWordCount = countWords(parsed.chapterBody);
 
-    if (countWords(parsed.chapterBody) >= CHAPTER_TARGET_WORDS_MIN) {
+    if (
+      chapterWordCount >= generationProfile.targetWordsMin &&
+      !hasLikelyAbruptEnding(parsed.chapterBody)
+    ) {
       break;
     }
+  }
+
+  for (
+    let rescueAttempt = 1;
+    rescueAttempt <= SHORT_CHAPTER_RECOVERY_ATTEMPTS;
+    rescueAttempt += 1
+  ) {
+    const stillTooShort = chapterWordCount < generationProfile.targetWordsMin;
+    const likelyCutOff = hasLikelyAbruptEnding(parsed.chapterBody);
+
+    if (!stillTooShort && !likelyCutOff) {
+      break;
+    }
+
+    const rescue = await generateStoryText({
+      prompt: buildChapterExpansionPrompt({
+        chapterNumber,
+        directionInput: direction,
+        currentTitle: parsed.chapterTitle,
+        currentBody: parsed.chapterBody,
+        currentChoices: parsed.choiceOptions,
+        profile: generationProfile,
+      }),
+      model: options.model,
+      maxOutputTokens: generationProfile.maxOutputTokens + 800,
+      temperature: generationProfile.temperature,
+    });
+
+    parsed = parseChapterOutput(rescue.text, chapterNumber, {
+      chapterTitle: parsed.chapterTitle,
+      chapterBody: parsed.chapterBody,
+      directionInput: direction,
+    });
+    modelUsed = rescue.model;
+    chapterWordCount = countWords(parsed.chapterBody);
+  }
+
+  if (chapterWordCount < minimumAcceptedWords) {
+    throw new Error(
+      `Chapter generation returned only ${chapterWordCount} words (minimum ${minimumAcceptedWords}). Please try again.`,
+    );
   }
 
   const chapter = await insertChapterTurn({
