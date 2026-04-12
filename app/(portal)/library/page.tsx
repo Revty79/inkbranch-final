@@ -1,6 +1,5 @@
 import { requireAuthorizedUser } from "@/lib/auth";
 import {
-  getReaderSessionDetail,
   listLibraryBooks,
   listLibraryCatalogWorlds,
   listReaderSessions,
@@ -17,16 +16,12 @@ export default async function LibraryPage() {
     listReaderSessions(user.id),
   ]);
 
-  const initialSession = sessions[0]
-    ? await getReaderSessionDetail(user, sessions[0].id)
-    : null;
-
   return (
     <LibraryReaderClient
       initialBooks={books}
       initialCatalogWorlds={catalogWorlds}
       initialSessions={sessions}
-      initialActiveSession={initialSession}
+      initialActiveSession={null}
     />
   );
 }
