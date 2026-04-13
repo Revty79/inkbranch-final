@@ -25,6 +25,7 @@ type Message = {
 const FALLBACK_READER_PAGE_CHAR_LIMIT = 1900;
 const MIN_READER_VIEWPORT_WIDTH = 220;
 const MIN_READER_VIEWPORT_HEIGHT = 180;
+const MOBILE_READER_PAGINATION_MAX_WIDTH = 768;
 
 type ReaderPageViewport = {
   width: number;
@@ -467,8 +468,11 @@ export function LibraryReaderClient({
 
     const fallbackPages = paginateChapterContentFallback(selectedChapter.content);
     const styleSource = readerPageTextRef.current;
+    const shouldUseMobilePaginationFallback =
+      readerViewport.width > 0 &&
+      readerViewport.width <= MOBILE_READER_PAGINATION_MAX_WIDTH;
 
-    if (!styleSource) {
+    if (!styleSource || shouldUseMobilePaginationFallback) {
       setSelectedChapterPages((current) =>
         arePagesEqual(current, fallbackPages) ? current : fallbackPages,
       );
@@ -857,15 +861,15 @@ export function LibraryReaderClient({
 
               {selectedChapter ? (
                 <>
-                  <article className="flex h-[68vh] min-h-[26rem] max-h-[44rem] flex-col rounded-xl border border-[var(--parchment-border)] bg-[var(--parchment-soft)] px-5 py-6 shadow-inner sm:px-7">
+                  <article className="flex min-h-[58vh] flex-col rounded-xl border border-[var(--parchment-border)] bg-[var(--parchment-soft)] px-4 py-5 shadow-inner sm:h-[68vh] sm:min-h-[26rem] sm:max-h-[44rem] sm:px-7 sm:py-6">
                     <p className="text-xs tracking-[0.12em] text-[var(--ink-muted)] uppercase">
                       Chapter {selectedChapter.chapterNumber}
                     </p>
-                    <h3 className="mt-1 text-2xl font-semibold">{selectedChapter.title}</h3>
-                    <div ref={readerPageBodyRef} className="mt-5 min-h-0 flex-1 overflow-hidden">
+                    <h3 className="mt-1 text-xl font-semibold sm:text-2xl">{selectedChapter.title}</h3>
+                    <div ref={readerPageBodyRef} className="mt-4 min-h-0 flex-1 sm:mt-5 sm:overflow-hidden">
                       <p
                         ref={readerPageTextRef}
-                        className="whitespace-pre-wrap text-base leading-8 text-[var(--ink)]"
+                        className="whitespace-pre-wrap text-sm leading-7 text-[var(--ink)] sm:text-base sm:leading-8"
                       >
                         {currentPageText}
                       </p>
