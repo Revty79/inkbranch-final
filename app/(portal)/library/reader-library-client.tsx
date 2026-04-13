@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 
 import type {
   CatalogWorld,
@@ -22,7 +22,15 @@ type Message = {
   text: string;
 };
 
-const READER_PAGE_CHAR_LIMIT = 1900;
+const FALLBACK_READER_PAGE_CHAR_LIMIT = 1900;
+const MIN_READER_VIEWPORT_WIDTH = 220;
+const MIN_READER_VIEWPORT_HEIGHT = 180;
+
+type ReaderPageViewport = {
+  width: number;
+  height: number;
+  styleSource: HTMLElement;
+};
 
 function formatDate(value: string) {
   return new Intl.DateTimeFormat("en-US", {
@@ -108,8 +116,18 @@ function splitParagraphByLength(paragraph: string, maxLength: number) {
   return chunks;
 }
 
-function paginateChapterContent(content: string, pageCharLimit = READER_PAGE_CHAR_LIMIT) {
-  const trimmedContent = content.trim();
+function normalizeChapterText(content: string) {
+  return content
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n")
+    .trim();
+}
+
+function paginateChapterContentFallback(
+  content: string,
+  pageCharLimit = FALLBACK_READER_PAGE_CHAR_LIMIT,
+) {
+  const trimmedContent = normalizeChapterText(content);
 
   if (!trimmedContent) {
     return [""];
@@ -153,6 +171,148 @@ function paginateChapterContent(content: string, pageCharLimit = READER_PAGE_CHA
   return pages.length > 0 ? pages : [trimmedContent];
 }
 
+function tokenizeChapterForPagination(content: string) {
+  const normalized = normalizeChapterText(content);
+
+  if (!normalized) {
+    return [] as string[];
+  }
+
+  const paragraphs = normalized
+    .split(/\n{2,}/)
+    .map((paragraph) => paragraph.trim())
+    .filter(Boolean);
+  const tokens: string[] = [];
+
+  for (let paragraphIndex = 0; paragraphIndex < paragraphs.length; paragraphIndex += 1) {
+    const paragraph = paragraphs[paragraphIndex];
+    const words = paragraph.split(/\s+/).filter(Boolean);
+
+    for (let wordIndex = 0; wordIndex < words.length; wordIndex += 1) {
+      const word = words[wordIndex];
+      tokens.push(wordIndex === 0 ? word : ` ${word}`);
+    }
+
+    if (paragraphIndex < paragraphs.length - 1) {
+      tokens.push("\n\n");
+    }
+  }
+
+  return tokens;
+}
+
+function paginateChapterContent(content: string, viewport: ReaderPageViewport) {
+  const trimmedContent = content.trim();
+
+  if (!trimmedContent) {
+    return [""];
+  }
+
+  if (
+    typeof window === "undefined" ||
+    typeof document === "undefined" ||
+    viewport.width < MIN_READER_VIEWPORT_WIDTH ||
+    viewport.height < MIN_READER_VIEWPORT_HEIGHT
+  ) {
+    return paginateChapterContentFallback(trimmedContent);
+  }
+
+  const tokens = tokenizeChapterForPagination(trimmedContent);
+
+  if (tokens.length === 0) {
+    return [trimmedContent];
+  }
+
+  const measurer = document.createElement("div");
+  const computed = window.getComputedStyle(viewport.styleSource);
+  const typographyProperties = [
+    "font-family",
+    "font-size",
+    "font-style",
+    "font-weight",
+    "font-stretch",
+    "line-height",
+    "letter-spacing",
+    "word-spacing",
+    "text-transform",
+    "text-indent",
+  ];
+
+  for (const property of typographyProperties) {
+    measurer.style.setProperty(property, computed.getPropertyValue(property));
+  }
+
+  measurer.style.width = `${Math.floor(viewport.width)}px`;
+  measurer.style.position = "absolute";
+  measurer.style.left = "-10000px";
+  measurer.style.top = "0";
+  measurer.style.visibility = "hidden";
+  measurer.style.pointerEvents = "none";
+  measurer.style.padding = "0";
+  measurer.style.margin = "0";
+  measurer.style.border = "0";
+  measurer.style.boxSizing = "border-box";
+  measurer.style.whiteSpace = "pre-wrap";
+  measurer.style.wordBreak = "break-word";
+  measurer.style.overflowWrap = "break-word";
+  measurer.style.contain = "layout style";
+  document.body.appendChild(measurer);
+
+  try {
+    const pages: string[] = [];
+    const maxHeight = Math.floor(viewport.height);
+    let startIndex = 0;
+
+    while (startIndex < tokens.length) {
+      let low = startIndex + 1;
+      let high = tokens.length;
+      let best = startIndex + 1;
+
+      while (low <= high) {
+        const mid = Math.floor((low + high) / 2);
+        measurer.textContent = tokens.slice(startIndex, mid).join("");
+
+        if (measurer.scrollHeight <= maxHeight) {
+          best = mid;
+          low = mid + 1;
+        } else {
+          high = mid - 1;
+        }
+      }
+
+      const pageText = tokens
+        .slice(startIndex, best)
+        .join("")
+        .replace(/[ \t]+\n/g, "\n")
+        .trim();
+
+      if (pageText) {
+        pages.push(pageText);
+      }
+
+      startIndex = best;
+    }
+
+    return pages.length > 0 ? pages : [trimmedContent];
+  } finally {
+    measurer.remove();
+  }
+}
+
+function arePagesEqual(current: string[], next: string[]) {
+  if (current.length !== next.length) {
+    return false;
+  }
+
+  for (let index = 0; index < current.length; index += 1) {
+    if (current[index] !== next[index]) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
 export function LibraryReaderClient({
   initialBooks,
   initialCatalogWorlds,
@@ -178,6 +338,10 @@ export function LibraryReaderClient({
       null,
   );
   const [selectedPageIndex, setSelectedPageIndex] = useState(0);
+  const [selectedChapterPages, setSelectedChapterPages] = useState<string[]>([]);
+  const [readerViewport, setReaderViewport] = useState({ width: 0, height: 0 });
+  const readerPageBodyRef = useRef<HTMLDivElement | null>(null);
+  const readerPageTextRef = useRef<HTMLParagraphElement | null>(null);
 
   const sortedBooks = useMemo(
     () => [...books].sort((a, b) => b.addedAt.localeCompare(a.addedAt)),
@@ -197,13 +361,6 @@ export function LibraryReaderClient({
   const selectedChapterIndex = selectedChapter
     ? activeSession?.chapters.findIndex((chapter) => chapter.id === selectedChapter.id) ?? -1
     : -1;
-  const selectedChapterPages = useMemo(
-    () =>
-      selectedChapter
-        ? paginateChapterContent(selectedChapter.content)
-        : ([] as string[]),
-    [selectedChapter],
-  );
   const normalizedPageIndex =
     selectedChapterPages.length === 0
       ? 0
@@ -255,6 +412,77 @@ export function LibraryReaderClient({
       setSelectedPageIndex(maxPageIndex);
     }
   }, [selectedChapterPages, selectedPageIndex]);
+
+  useEffect(() => {
+    if (!activeSession) {
+      setReaderViewport({ width: 0, height: 0 });
+      return;
+    }
+
+    const readerBody = readerPageBodyRef.current;
+
+    if (!readerBody) {
+      return;
+    }
+
+    const updateViewport = () => {
+      const nextWidth = Math.floor(readerBody.clientWidth);
+      const nextHeight = Math.floor(readerBody.clientHeight);
+
+      setReaderViewport((current) => {
+        if (current.width === nextWidth && current.height === nextHeight) {
+          return current;
+        }
+
+        return { width: nextWidth, height: nextHeight };
+      });
+    };
+
+    updateViewport();
+
+    if (typeof ResizeObserver === "undefined") {
+      window.addEventListener("resize", updateViewport);
+
+      return () => {
+        window.removeEventListener("resize", updateViewport);
+      };
+    }
+
+    const resizeObserver = new ResizeObserver(() => {
+      updateViewport();
+    });
+
+    resizeObserver.observe(readerBody);
+
+    return () => {
+      resizeObserver.disconnect();
+    };
+  }, [activeSession, selectedChapter?.id]);
+
+  useEffect(() => {
+    if (!selectedChapter) {
+      setSelectedChapterPages((current) => (current.length === 0 ? current : []));
+      return;
+    }
+
+    const fallbackPages = paginateChapterContentFallback(selectedChapter.content);
+    const styleSource = readerPageTextRef.current;
+
+    if (!styleSource) {
+      setSelectedChapterPages((current) =>
+        arePagesEqual(current, fallbackPages) ? current : fallbackPages,
+      );
+      return;
+    }
+
+    const pages = paginateChapterContent(selectedChapter.content, {
+      width: readerViewport.width,
+      height: readerViewport.height,
+      styleSource,
+    });
+
+    setSelectedChapterPages((current) => (arePagesEqual(current, pages) ? current : pages));
+  }, [readerViewport.height, readerViewport.width, selectedChapter]);
 
   async function refreshLibraryAndCatalog() {
     const [booksResponse, worldsResponse] = await Promise.all([
@@ -629,14 +857,19 @@ export function LibraryReaderClient({
 
               {selectedChapter ? (
                 <>
-                  <article className="min-h-[55vh] rounded-xl border border-[var(--parchment-border)] bg-[var(--parchment-soft)] px-5 py-6 shadow-inner sm:px-7">
+                  <article className="flex h-[68vh] min-h-[26rem] max-h-[44rem] flex-col rounded-xl border border-[var(--parchment-border)] bg-[var(--parchment-soft)] px-5 py-6 shadow-inner sm:px-7">
                     <p className="text-xs tracking-[0.12em] text-[var(--ink-muted)] uppercase">
                       Chapter {selectedChapter.chapterNumber}
                     </p>
                     <h3 className="mt-1 text-2xl font-semibold">{selectedChapter.title}</h3>
-                    <p className="mt-5 whitespace-pre-wrap text-base leading-8 text-[var(--ink)]">
-                      {currentPageText}
-                    </p>
+                    <div ref={readerPageBodyRef} className="mt-5 min-h-0 flex-1 overflow-hidden">
+                      <p
+                        ref={readerPageTextRef}
+                        className="whitespace-pre-wrap text-base leading-8 text-[var(--ink)]"
+                      >
+                        {currentPageText}
+                      </p>
+                    </div>
                   </article>
 
                   <div className="flex flex-wrap items-center justify-between gap-3">

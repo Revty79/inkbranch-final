@@ -1,5 +1,6 @@
 import Link from "next/link";
 
+import { AmbientPlayer } from "@/components/ambient-player";
 import { LogoutButton } from "@/components/logout-button";
 import { formatRoleLabel, formatUserGreeting, requireSessionUser } from "@/lib/auth";
 import { getAccessiblePortalCards } from "@/lib/portal";
@@ -53,7 +54,10 @@ export default async function PortalLayout({
               </nav>
             </div>
 
-            <LogoutButton />
+            <div className="flex w-full flex-col items-end gap-3 xl:w-auto">
+              <AmbientPlayer />
+              <LogoutButton />
+            </div>
           </div>
         </header>
 
