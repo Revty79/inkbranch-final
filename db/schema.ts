@@ -169,6 +169,7 @@ export const storySessions = pgTable(
       withTimezone: true,
       mode: "date",
     }).notNull(),
+    readingSeconds: integer("reading_seconds").notNull().default(0),
   },
   (table) => [
     index("story_sessions_reader_status_idx").on(table.readerId, table.status),

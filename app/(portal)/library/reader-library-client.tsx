@@ -26,6 +26,8 @@ const FALLBACK_READER_PAGE_CHAR_LIMIT = 1900;
 const MIN_READER_VIEWPORT_WIDTH = 220;
 const MIN_READER_VIEWPORT_HEIGHT = 180;
 const MOBILE_READER_PAGINATION_MAX_WIDTH = 768;
+const READING_ACTIVITY_PING_INTERVAL_MS = 30_000;
+const READING_ACTIVITY_MAX_SECONDS_PER_PING = 45;
 
 type ReaderPageViewport = {
   width: number;
@@ -381,6 +383,7 @@ export function LibraryReaderClient({
       !isGeneratingChapter &&
       !isLoadingSession,
   );
+  const activeSessionId = activeSession?.session.id ?? null;
 
   useEffect(() => {
     if (!activeSession) {
@@ -487,6 +490,77 @@ export function LibraryReaderClient({
 
     setSelectedChapterPages((current) => (arePagesEqual(current, pages) ? current : pages));
   }, [readerViewport.height, readerViewport.width, selectedChapter]);
+
+  useEffect(() => {
+    if (!activeSessionId || typeof window === "undefined" || typeof document === "undefined") {
+      return;
+    }
+
+    let lastPingAt = Date.now();
+
+    const sendActivityPing = (secondsSpent: number) => {
+      if (secondsSpent <= 0) {
+        return;
+      }
+
+      void fetch("/api/reader/activity", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          sessionId: activeSessionId,
+          secondsSpent,
+        }),
+        keepalive: true,
+      }).catch(() => {
+        // Ignore ping failures; this is best-effort telemetry.
+      });
+    };
+
+    const flushElapsedTime = (allowWhileHidden: boolean) => {
+      const now = Date.now();
+      const elapsedSeconds = Math.floor((now - lastPingAt) / 1000);
+      lastPingAt = now;
+
+      if (elapsedSeconds <= 0) {
+        return;
+      }
+
+      if (!allowWhileHidden && document.visibilityState !== "visible") {
+        return;
+      }
+
+      sendActivityPing(Math.min(elapsedSeconds, READING_ACTIVITY_MAX_SECONDS_PER_PING));
+    };
+
+    const intervalId = window.setInterval(() => {
+      flushElapsedTime(false);
+    }, READING_ACTIVITY_PING_INTERVAL_MS);
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "hidden") {
+        flushElapsedTime(true);
+        return;
+      }
+
+      lastPingAt = Date.now();
+    };
+
+    const handlePageHide = () => {
+      flushElapsedTime(true);
+    };
+
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    window.addEventListener("pagehide", handlePageHide);
+
+    return () => {
+      flushElapsedTime(true);
+      window.clearInterval(intervalId);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      window.removeEventListener("pagehide", handlePageHide);
+    };
+  }, [activeSessionId]);
 
   async function refreshLibraryAndCatalog() {
     const [booksResponse, worldsResponse] = await Promise.all([

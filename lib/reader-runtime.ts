@@ -234,6 +234,7 @@ const CHOICE_MIN_SENTENCES = 2;
 const CHOICE_MAX_SENTENCES = 3;
 const CHOICE_MIN_WORDS = 16;
 const CHOICE_MAX_WORDS = 110;
+const MAX_READING_ACTIVITY_SECONDS_PER_UPDATE = 300;
 const CHOICE_META_ARTIFACT_PATTERNS = [
   /\bopen chapter\s*\d+\b/i,
   /\bstrong hook\b/i,
@@ -1178,6 +1179,45 @@ export async function listReaderSessions(userId: string): Promise<ReaderSessionS
     chapterCount: toNumber(row.chapter_count),
     lastChapterTitle: row.last_chapter_title,
   }));
+}
+
+export async function recordReaderActivity(options: {
+  user: PublicUser;
+  sessionId: string;
+  secondsSpent: number;
+}) {
+  const sessionId = options.sessionId.trim();
+
+  if (!sessionId) {
+    throw new Error("sessionId is required.");
+  }
+
+  const parsedSeconds = Math.floor(options.secondsSpent);
+
+  if (!Number.isFinite(parsedSeconds) || parsedSeconds <= 0) {
+    throw new Error("secondsSpent must be a positive number.");
+  }
+
+  const boundedSeconds = Math.min(
+    parsedSeconds,
+    MAX_READING_ACTIVITY_SECONDS_PER_UPDATE,
+  );
+  const db = await getDatabase();
+  const result = await db.query<{ id: string }>(
+    `
+      UPDATE story_sessions
+      SET reading_seconds = COALESCE(reading_seconds, 0) + $3
+      WHERE id = $1
+        AND reader_id = $2
+        AND status = 'ACTIVE'
+      RETURNING id
+    `,
+    [sessionId, options.user.id, boundedSeconds],
+  );
+
+  if (!result.rows[0]) {
+    throw new Error("Reading session not found.");
+  }
 }
 
 export async function getReaderSessionDetail(

@@ -69,7 +69,8 @@ CREATE TABLE IF NOT EXISTS story_sessions (
   status TEXT NOT NULL DEFAULT 'ACTIVE' CHECK (status IN ('ACTIVE', 'COMPLETED', 'ABANDONED')),
   started_at TIMESTAMPTZ NOT NULL,
   completed_at TIMESTAMPTZ,
-  updated_at TIMESTAMPTZ NOT NULL
+  updated_at TIMESTAMPTZ NOT NULL,
+  reading_seconds INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE INDEX IF NOT EXISTS story_sessions_reader_status_idx ON story_sessions(reader_id, status);

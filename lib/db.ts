@@ -98,7 +98,8 @@ async function initializeSchema() {
       status TEXT NOT NULL DEFAULT 'ACTIVE' CHECK (status IN ('ACTIVE', 'COMPLETED', 'ABANDONED')),
       started_at TIMESTAMPTZ NOT NULL,
       completed_at TIMESTAMPTZ,
-      updated_at TIMESTAMPTZ NOT NULL
+      updated_at TIMESTAMPTZ NOT NULL,
+      reading_seconds INTEGER NOT NULL DEFAULT 0
     );
 
     CREATE TABLE IF NOT EXISTS library_books (
@@ -130,6 +131,8 @@ async function initializeSchema() {
       ADD COLUMN IF NOT EXISTS chapter_cap INTEGER;
     ALTER TABLE users
       ADD COLUMN IF NOT EXISTS bookstore_seen_at TIMESTAMPTZ;
+    ALTER TABLE story_sessions
+      ADD COLUMN IF NOT EXISTS reading_seconds INTEGER NOT NULL DEFAULT 0;
 
     DO $$
     BEGIN
