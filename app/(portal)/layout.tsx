@@ -3,6 +3,7 @@ import Link from "next/link";
 import { AmbientPlayer } from "@/components/ambient-player";
 import { LogoutButton } from "@/components/logout-button";
 import { formatRoleLabel, formatUserGreeting, requireSessionUser } from "@/lib/auth";
+import { hasUnseenBookstoreContent } from "@/lib/bookstore-alerts";
 import { getAccessiblePortalCards } from "@/lib/portal";
 
 export default async function PortalLayout({
@@ -12,6 +13,7 @@ export default async function PortalLayout({
 }>) {
   const user = await requireSessionUser();
   const accessibleCards = getAccessiblePortalCards(user.role);
+  const showBookstoreNewTag = await hasUnseenBookstoreContent(user);
 
   return (
     <div className="min-h-screen px-4 py-4 pt-[calc(1rem+env(safe-area-inset-top))] pb-[calc(1rem+env(safe-area-inset-bottom))] sm:px-6 sm:py-6">
@@ -46,9 +48,14 @@ export default async function PortalLayout({
                   <Link
                     key={card.href}
                     href={card.href}
-                    className="rounded-full border border-[var(--parchment-border)] bg-transparent px-4 py-2 text-sm font-medium text-[var(--ink)] transition hover:bg-[var(--parchment-soft)]"
+                    className="inline-flex items-center gap-2 rounded-full border border-[var(--parchment-border)] bg-transparent px-4 py-2 text-sm font-medium text-[var(--ink)] transition hover:bg-[var(--parchment-soft)]"
                   >
                     {card.title}
+                    {card.href === "/bookstore" && showBookstoreNewTag ? (
+                      <span className="rounded-full border border-[var(--focus-border)] bg-[var(--focus-ring)] px-2 py-0.5 text-[10px] leading-none font-semibold tracking-[0.1em] text-[var(--ink)] uppercase">
+                        New
+                      </span>
+                    ) : null}
                   </Link>
                 ))}
               </nav>

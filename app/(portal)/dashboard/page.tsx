@@ -1,11 +1,13 @@
 import Link from "next/link";
 
 import { formatRoleLabel, requireSessionUser } from "@/lib/auth";
+import { hasUnseenBookstoreContent } from "@/lib/bookstore-alerts";
 import { getAccessiblePortalCards, getRolePortalSummary } from "@/lib/portal";
 
 export default async function DashboardPage() {
   const user = await requireSessionUser();
   const accessibleCards = getAccessiblePortalCards(user.role);
+  const showBookstoreNewTag = await hasUnseenBookstoreContent(user);
 
   return (
     <main className="space-y-6">
@@ -41,21 +43,32 @@ export default async function DashboardPage() {
       </section>
 
       <section className="grid gap-5 md:grid-cols-2 xl:grid-cols-4">
-        {accessibleCards.map((card) => (
-          <Link key={card.href} href={card.href} className={`book-card ${card.themeClassName}`}>
-            <div className="relative z-10">
-              <p className="book-card-kicker">{card.kicker}</p>
-              <h3 className="book-card-title">{card.title}</h3>
-              <p className="book-card-description">{card.description}</p>
-            </div>
-            <div className="relative z-10 flex items-end justify-between gap-3 pt-6">
-              <span className="book-card-status">{card.statusLabel}</span>
-              <span className="text-sm font-semibold text-[rgba(248,239,219,0.92)]">
-                {card.callToAction}
-              </span>
-            </div>
-          </Link>
-        ))}
+        {accessibleCards.map((card) => {
+          const shouldShowNewTag = card.href === "/bookstore" && showBookstoreNewTag;
+
+          return (
+            <Link key={card.href} href={card.href} className={`book-card ${card.themeClassName}`}>
+              <div className="relative z-10">
+                <p className="book-card-kicker">{card.kicker}</p>
+                <h3 className="book-card-title">{card.title}</h3>
+                <p className="book-card-description">{card.description}</p>
+              </div>
+              <div className="relative z-10 flex items-end justify-between gap-3 pt-6">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="book-card-status">{card.statusLabel}</span>
+                  {shouldShowNewTag ? (
+                    <span className="rounded-full border border-[rgba(248,239,219,0.62)] bg-[rgba(255,255,255,0.16)] px-2 py-0.5 text-[10px] leading-none font-semibold tracking-[0.1em] text-[rgba(248,239,219,0.98)] uppercase">
+                      New
+                    </span>
+                  ) : null}
+                </div>
+                <span className="text-sm font-semibold text-[rgba(248,239,219,0.92)]">
+                  {card.callToAction}
+                </span>
+              </div>
+            </Link>
+          );
+        })}
       </section>
 
       <section className="grid gap-5 lg:grid-cols-2">

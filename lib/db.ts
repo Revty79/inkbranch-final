@@ -44,7 +44,8 @@ async function initializeSchema() {
       role TEXT NOT NULL CHECK (role IN ('READER', 'AUTHOR', 'ADMIN')),
       password_hash TEXT NOT NULL,
       created_at TIMESTAMPTZ NOT NULL,
-      updated_at TIMESTAMPTZ NOT NULL
+      updated_at TIMESTAMPTZ NOT NULL,
+      bookstore_seen_at TIMESTAMPTZ
     );
 
     CREATE TABLE IF NOT EXISTS story_worlds (
@@ -127,6 +128,8 @@ async function initializeSchema() {
       ADD COLUMN IF NOT EXISTS choice_options TEXT NOT NULL DEFAULT '[]';
     ALTER TABLE story_worlds
       ADD COLUMN IF NOT EXISTS chapter_cap INTEGER;
+    ALTER TABLE users
+      ADD COLUMN IF NOT EXISTS bookstore_seen_at TIMESTAMPTZ;
 
     DO $$
     BEGIN

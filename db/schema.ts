@@ -26,6 +26,10 @@ export const users = pgTable(
       withTimezone: true,
       mode: "date",
     }).notNull(),
+    bookstoreSeenAt: timestamp("bookstore_seen_at", {
+      withTimezone: true,
+      mode: "date",
+    }),
   },
   (table) => [uniqueIndex("users_email_unique_idx").on(table.email)],
 );

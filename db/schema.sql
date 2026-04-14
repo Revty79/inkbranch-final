@@ -5,7 +5,8 @@ CREATE TABLE IF NOT EXISTS users (
   role TEXT NOT NULL CHECK (role IN ('READER', 'AUTHOR', 'ADMIN')),
   password_hash TEXT NOT NULL,
   created_at TIMESTAMPTZ NOT NULL,
-  updated_at TIMESTAMPTZ NOT NULL
+  updated_at TIMESTAMPTZ NOT NULL,
+  bookstore_seen_at TIMESTAMPTZ
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS users_email_unique_idx ON users(email);
