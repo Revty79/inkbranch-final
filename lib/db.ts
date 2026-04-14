@@ -5,13 +5,49 @@ const globalForDatabase = globalThis as typeof globalThis & {
   __inkbranchSchemaReady?: Promise<void>;
 };
 
+function isLikelyLocalHostname(hostname: string) {
+  const normalized = hostname.trim().toLowerCase();
+  return (
+    normalized === "localhost" ||
+    normalized === "127.0.0.1" ||
+    normalized === "::1"
+  );
+}
+
+function resolveSslConfig(connectionString?: string): PoolConfig["ssl"] {
+  const configuredFlag = process.env.POSTGRES_SSL?.trim().toLowerCase();
+  const sslEnabledByFlag = configuredFlag === "true";
+
+  if (sslEnabledByFlag) {
+    return { rejectUnauthorized: false };
+  }
+
+  let hostname = process.env.POSTGRES_HOST?.trim() || "";
+
+  if (connectionString) {
+    try {
+      hostname = new URL(connectionString).hostname;
+    } catch {
+      // Ignore parse failures and fall back to POSTGRES_HOST/default behavior.
+    }
+  }
+
+  // Managed providers (Render, Neon, Supabase, etc.) usually require TLS.
+  if (hostname && !isLikelyLocalHostname(hostname)) {
+    return { rejectUnauthorized: false };
+  }
+
+  return undefined;
+}
+
 function resolvePoolConfig(): PoolConfig {
   const connectionString = process.env.DATABASE_URL?.trim();
+  const ssl = resolveSslConfig(connectionString);
 
   if (connectionString) {
     return {
       connectionString,
-      ssl: process.env.POSTGRES_SSL === "true" ? { rejectUnauthorized: false } : undefined,
+      ssl,
     };
   }
 
@@ -21,7 +57,7 @@ function resolvePoolConfig(): PoolConfig {
     database: process.env.POSTGRES_DATABASE?.trim() || "inkbranch",
     user: process.env.POSTGRES_USER?.trim() || "inkbranch_app",
     password: process.env.POSTGRES_PASSWORD,
-    ssl: process.env.POSTGRES_SSL === "true" ? { rejectUnauthorized: false } : undefined,
+    ssl,
   };
 }
 

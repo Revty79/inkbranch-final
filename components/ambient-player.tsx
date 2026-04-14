@@ -4,9 +4,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 const ENABLED_STORAGE_KEY = "inkbranch.ambient.enabled";
 const VOLUME_STORAGE_KEY = "inkbranch.ambient.volume";
-const DEFAULT_VOLUME = 0.08;
-const MIN_VOLUME = 0.02;
-const MAX_VOLUME = 0.24;
+const DEFAULT_VOLUME = 0.16;
+const MIN_VOLUME = 0;
+const MAX_VOLUME = 0.6;
 const DEFAULT_AMBIENT_AUDIO_SOURCE = "/audio/ambient.mp3";
 const FALLBACK_AMBIENT_AUDIO_SOURCES = [
   "/audio/music_for_video-please-calm-my-mind-125566.mp3",
@@ -48,6 +48,7 @@ export function AmbientPlayer() {
   const source =
     sourceCandidates[Math.min(sourceIndex, sourceCandidates.length - 1)] ??
     DEFAULT_AMBIENT_AUDIO_SOURCE;
+  const buttonLabel = isEnabled ? (isPlaying ? "Pause" : "Play") : "Play";
 
   const clearFadeTimer = useCallback(() => {
     if (!fadeTimerRef.current) {
@@ -102,19 +103,18 @@ export function AmbientPlayer() {
       return;
     }
 
-    try {
-      if (!audio.paused) {
-        fadeTo(volume);
-        return;
-      }
+      try {
+        if (!audio.paused) {
+          fadeTo(volume);
+          return;
+        }
 
-      audio.loop = true;
-      audio.volume = 0;
-      await audio.play();
-      fadeTo(volume);
-    } catch {
-      // Playback can fail without a user gesture; keep state and let the next click retry.
-    }
+        audio.loop = true;
+        audio.volume = clampVolume(volume);
+        await audio.play();
+      } catch {
+        // Playback can fail without a user gesture; keep state and let the next click retry.
+      }
   }, [fadeTo, hasTrackError, volume]);
 
   useEffect(() => {
@@ -235,18 +235,24 @@ export function AmbientPlayer() {
             if (hasTrackError) {
               setSourceIndex(0);
               setHasTrackError(false);
+              setIsEnabled(true);
+              return;
             }
 
-            const nextEnabled = !isEnabled;
-            setIsEnabled(nextEnabled);
-
-            if (nextEnabled) {
-              void startPlayback();
+            if (isEnabled && isPlaying) {
+              setIsEnabled(false);
+              return;
             }
+
+            if (!isEnabled) {
+              setIsEnabled(true);
+            }
+
+            void startPlayback();
           }}
           className="rounded-full border border-[var(--parchment-border)] px-3 py-1 text-xs font-semibold text-[var(--ink)] transition hover:bg-white/70"
         >
-          {isEnabled ? (isPlaying ? "Pause" : "Play") : "Off"}
+          {buttonLabel}
         </button>
       </div>
 
