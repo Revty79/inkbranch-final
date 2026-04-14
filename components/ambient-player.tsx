@@ -7,6 +7,14 @@ const VOLUME_STORAGE_KEY = "inkbranch.ambient.volume";
 const DEFAULT_VOLUME = 0.08;
 const MIN_VOLUME = 0.02;
 const MAX_VOLUME = 0.24;
+const DEFAULT_AMBIENT_AUDIO_SOURCE = "/audio/ambient.mp3";
+const FALLBACK_AMBIENT_AUDIO_SOURCES = [
+  "/audio/music_for_video-please-calm-my-mind-125566.mp3",
+  "/audio/folk_acoustic-april-198611.mp3",
+  "/audio/stevekaldes-a-quiet-joy-stevekaldes-piano-385744.mp3",
+  "/audio/stevekaldes-snow-stevekaldes-piano-397491.mp3",
+  "/audio/stevekaldes-plea-for-forgiveness-stevekaldes-piano-art-ayla-heefner-401168.mp3",
+];
 
 function clampVolume(value: number) {
   if (!Number.isFinite(value)) {
@@ -19,16 +27,27 @@ function clampVolume(value: number) {
 export function AmbientPlayer() {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const fadeTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const sourceIndexRef = useRef(0);
   const [hasHydrated, setHasHydrated] = useState(false);
   const [isEnabled, setIsEnabled] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
   const [hasTrackError, setHasTrackError] = useState(false);
   const [volume, setVolume] = useState(DEFAULT_VOLUME);
+  const [sourceIndex, setSourceIndex] = useState(0);
 
-  const source = useMemo(
-    () => process.env.NEXT_PUBLIC_AMBIENT_AUDIO_SRC?.trim() || "/audio/ambient.mp3",
-    [],
-  );
+  const sourceCandidates = useMemo(() => {
+    const configuredSource = process.env.NEXT_PUBLIC_AMBIENT_AUDIO_SRC?.trim();
+    const allCandidates = [
+      configuredSource,
+      DEFAULT_AMBIENT_AUDIO_SOURCE,
+      ...FALLBACK_AMBIENT_AUDIO_SOURCES,
+    ].filter((value): value is string => Boolean(value));
+
+    return [...new Set(allCandidates)];
+  }, []);
+  const source =
+    sourceCandidates[Math.min(sourceIndex, sourceCandidates.length - 1)] ??
+    DEFAULT_AMBIENT_AUDIO_SOURCE;
 
   const clearFadeTimer = useCallback(() => {
     if (!fadeTimerRef.current) {
@@ -76,6 +95,28 @@ export function AmbientPlayer() {
     }, 45);
   }, [clearFadeTimer]);
 
+  const startPlayback = useCallback(async () => {
+    const audio = audioRef.current;
+
+    if (!audio || hasTrackError) {
+      return;
+    }
+
+    try {
+      if (!audio.paused) {
+        fadeTo(volume);
+        return;
+      }
+
+      audio.loop = true;
+      audio.volume = 0;
+      await audio.play();
+      fadeTo(volume);
+    } catch {
+      // Playback can fail without a user gesture; keep state and let the next click retry.
+    }
+  }, [fadeTo, hasTrackError, volume]);
+
   useEffect(() => {
     const frame = window.requestAnimationFrame(() => {
       const storedEnabled = window.localStorage.getItem(ENABLED_STORAGE_KEY) === "1";
@@ -111,13 +152,15 @@ export function AmbientPlayer() {
   }, [hasHydrated, volume]);
 
   useEffect(() => {
+    sourceIndexRef.current = sourceIndex;
+  }, [sourceIndex]);
+
+  useEffect(() => {
     const audio = audioRef.current;
 
     if (!audio || !hasHydrated || hasTrackError) {
       return;
     }
-
-    audio.loop = true;
 
     if (!isEnabled) {
       if (audio.paused) {
@@ -136,25 +179,8 @@ export function AmbientPlayer() {
       return;
     }
 
-    const startPlayback = async () => {
-      try {
-        if (!audio.paused) {
-          fadeTo(volume);
-          return;
-        }
-
-        audio.volume = 0;
-        await audio.play();
-        setIsPlaying(true);
-        fadeTo(volume);
-      } catch {
-        setIsEnabled(false);
-        setIsPlaying(false);
-      }
-    };
-
     void startPlayback();
-  }, [fadeTo, hasHydrated, hasTrackError, isEnabled, volume]);
+  }, [hasHydrated, hasTrackError, isEnabled, source, startPlayback, fadeTo]);
 
   useEffect(() => {
     const audio = audioRef.current;
@@ -167,9 +193,15 @@ export function AmbientPlayer() {
     const handlePause = () => setIsPlaying(false);
     const handleError = () => {
       clearFadeTimer();
+      setIsPlaying(false);
+
+      if (sourceIndexRef.current < sourceCandidates.length - 1) {
+        setSourceIndex((current) => Math.min(current + 1, sourceCandidates.length - 1));
+        return;
+      }
+
       setHasTrackError(true);
       setIsEnabled(false);
-      setIsPlaying(false);
     };
 
     audio.addEventListener("playing", handlePlaying);
@@ -181,7 +213,7 @@ export function AmbientPlayer() {
       audio.removeEventListener("pause", handlePause);
       audio.removeEventListener("error", handleError);
     };
-  }, [clearFadeTimer]);
+  }, [clearFadeTimer, sourceCandidates.length]);
 
   useEffect(() => {
     return () => {
@@ -191,7 +223,7 @@ export function AmbientPlayer() {
 
   return (
     <div className="w-full max-w-[290px] rounded-2xl border border-[var(--parchment-border)] bg-[var(--parchment-soft)] px-3 py-3 shadow-sm">
-      <audio ref={audioRef} src={source} preload="none" />
+      <audio ref={audioRef} src={source} preload="metadata" />
 
       <div className="flex items-center justify-between gap-2">
         <p className="text-xs tracking-[0.12em] text-[var(--ink-muted)] uppercase">
@@ -199,7 +231,19 @@ export function AmbientPlayer() {
         </p>
         <button
           type="button"
-          onClick={() => setIsEnabled((current) => !current)}
+          onClick={() => {
+            if (hasTrackError) {
+              setSourceIndex(0);
+              setHasTrackError(false);
+            }
+
+            const nextEnabled = !isEnabled;
+            setIsEnabled(nextEnabled);
+
+            if (nextEnabled) {
+              void startPlayback();
+            }
+          }}
           className="rounded-full border border-[var(--parchment-border)] px-3 py-1 text-xs font-semibold text-[var(--ink)] transition hover:bg-white/70"
         >
           {isEnabled ? (isPlaying ? "Pause" : "Play") : "Off"}
@@ -231,7 +275,8 @@ export function AmbientPlayer() {
 
       {hasTrackError ? (
         <p className="mt-2 text-xs text-amber-800">
-          Add your music file at <code>/public/audio/ambient.mp3</code>.
+          Could not load ambient track. Add <code>/public/audio/ambient.mp3</code> or set{" "}
+          <code>NEXT_PUBLIC_AMBIENT_AUDIO_SRC</code>.
         </p>
       ) : (
         <p className="mt-2 text-xs text-[var(--ink-muted)]">
