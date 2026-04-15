@@ -174,6 +174,10 @@ type ChapterRow = {
   created_at: Date | string;
 };
 
+type PriorChapterTextRow = {
+  ai_response: string;
+};
+
 type ParsedChapterOutput = {
   chapterTitle: string;
   chapterBody: string;
@@ -235,6 +239,9 @@ const CHOICE_MAX_SENTENCES = 3;
 const CHOICE_MIN_WORDS = 16;
 const CHOICE_MAX_WORDS = 110;
 const MAX_READING_ACTIVITY_SECONDS_PER_UPDATE = 300;
+const OVERUSED_NAME_SCAN_CHAPTER_LIMIT = 36;
+const OVERUSED_NAME_MIN_CHAPTERS = 3;
+const OVERUSED_NAME_MAX_RESULTS = 8;
 const CHOICE_META_ARTIFACT_PATTERNS = [
   /\bopen chapter\s*\d+\b/i,
   /\bstrong hook\b/i,
@@ -242,6 +249,43 @@ const CHOICE_META_ARTIFACT_PATTERNS = [
   /\bcontinue naturally(?: from the previous chapter)?\b/i,
   /\breader direction\b/i,
 ];
+const CHARACTER_ACTION_VERB_PATTERN =
+  "(?:said|asked|replied|whispered|murmured|shouted|snapped|sighed|nodded|smiled|frowned|glanced|stared|looked|stepped|walked|ran|turned|leaned|paused|felt|thought|remembered|watched|pulled|pushed|grabbed|reached|hurried|froze|paid|began|started|moved|kept|waited|followed|opened|closed|wrote|read|spoke|listened|noticed)";
+const LIKELY_CHARACTER_NAME_PATTERN = new RegExp(
+  `\\b([A-Z][a-z]{2,})\\s+(?:[A-Z][a-z]{2,}\\s+)?${CHARACTER_ACTION_VERB_PATTERN}\\b`,
+  "g",
+);
+const HONORIFIC_NAME_PATTERN = /\b(?:Mr|Mrs|Ms|Dr)\.\s+([A-Z][a-z]{2,})\b/g;
+const NON_CHARACTER_NAME_TOKENS = new Set([
+  "chapter",
+  "prologue",
+  "epilogue",
+  "part",
+  "scene",
+  "monday",
+  "tuesday",
+  "wednesday",
+  "thursday",
+  "friday",
+  "saturday",
+  "sunday",
+  "january",
+  "february",
+  "march",
+  "april",
+  "may",
+  "june",
+  "july",
+  "august",
+  "september",
+  "october",
+  "november",
+  "december",
+  "north",
+  "south",
+  "east",
+  "west",
+]);
 
 function toNumber(value: number | string | null | undefined) {
   if (typeof value === "number") {
@@ -356,6 +400,111 @@ function summarizeForPrompt(input: string, maxChars: number) {
   const tail = normalized.slice(-tailLength).trimStart();
 
   return `${head} ... ${tail}`;
+}
+
+function isLikelyCharacterName(name: string) {
+  if (!name) {
+    return false;
+  }
+
+  const trimmed = name.trim();
+
+  if (!/^[A-Z][a-z]{2,}$/.test(trimmed)) {
+    return false;
+  }
+
+  return !NON_CHARACTER_NAME_TOKENS.has(trimmed.toLowerCase());
+}
+
+function extractLikelyCharacterNames(input: string) {
+  const normalized = normalizeChapterBody(input);
+
+  if (!normalized) {
+    return [];
+  }
+
+  const names: string[] = [];
+  let match: RegExpExecArray | null = null;
+
+  LIKELY_CHARACTER_NAME_PATTERN.lastIndex = 0;
+
+  while ((match = LIKELY_CHARACTER_NAME_PATTERN.exec(normalized)) !== null) {
+    const candidate = match[1]?.trim();
+
+    if (candidate && isLikelyCharacterName(candidate)) {
+      names.push(candidate);
+    }
+  }
+
+  HONORIFIC_NAME_PATTERN.lastIndex = 0;
+
+  while ((match = HONORIFIC_NAME_PATTERN.exec(normalized)) !== null) {
+    const candidate = match[1]?.trim();
+
+    if (candidate && isLikelyCharacterName(candidate)) {
+      names.push(candidate);
+    }
+  }
+
+  return names;
+}
+
+function findOverusedCharacterNamesFromHistory(chapters: string[]) {
+  const chapterPresenceCounts = new Map<string, number>();
+  const displayNameByKey = new Map<string, string>();
+
+  for (const chapterText of chapters) {
+    const namesInChapter = new Set<string>();
+
+    for (const name of extractLikelyCharacterNames(chapterText)) {
+      namesInChapter.add(name);
+    }
+
+    for (const name of namesInChapter) {
+      const key = name.toLowerCase();
+      chapterPresenceCounts.set(key, (chapterPresenceCounts.get(key) ?? 0) + 1);
+
+      if (!displayNameByKey.has(key)) {
+        displayNameByKey.set(key, name);
+      }
+    }
+  }
+
+  return [...chapterPresenceCounts.entries()]
+    .filter(([, count]) => count >= OVERUSED_NAME_MIN_CHAPTERS)
+    .sort((a, b) => {
+      if (b[1] !== a[1]) {
+        return b[1] - a[1];
+      }
+
+      return a[0].localeCompare(b[0]);
+    })
+    .slice(0, OVERUSED_NAME_MAX_RESULTS)
+    .map(([key]) => displayNameByKey.get(key) ?? key);
+}
+
+async function listOverusedCharacterNamesForReader(options: {
+  readerId: string;
+  currentWorldId: string;
+}) {
+  const db = await getDatabase();
+  const result = await db.query<PriorChapterTextRow>(
+    `
+      SELECT turns.ai_response
+      FROM story_turns AS turns
+      JOIN story_sessions AS sessions
+        ON sessions.id = turns.session_id
+      WHERE sessions.reader_id = $1
+        AND sessions.world_id <> $2
+      ORDER BY turns.created_at DESC
+      LIMIT $3
+    `,
+    [options.readerId, options.currentWorldId, OVERUSED_NAME_SCAN_CHAPTER_LIMIT],
+  );
+
+  return findOverusedCharacterNamesFromHistory(
+    result.rows.map((row) => row.ai_response).filter(Boolean),
+  );
 }
 
 function hasLikelyAbruptEnding(input: string) {
@@ -767,6 +916,7 @@ function buildChapterPrompt(
   chapterNumber: number,
   directionInput: string,
   profile: ChapterGenerationProfile,
+  overusedCharacterNames: string[],
 ) {
   const recentChapters = detail.chapters.slice(-profile.historyChapters);
 
@@ -829,6 +979,11 @@ function buildChapterPrompt(
         ])
       : ["No prior chapters yet."]),
     "",
+    overusedCharacterNames.length ? "Cross-book originality guard:" : null,
+    overusedCharacterNames.length
+      ? `- Avoid using these overused names as the chapter's central POV/protagonist unless canon explicitly requires it: ${overusedCharacterNames.join(", ")}`
+      : null,
+    "",
     `Target chapter number: ${chapterNumber}`,
     detail.libraryBook.chapterCap
       ? `You are writing chapter ${chapterNumber} of ${detail.libraryBook.chapterCap}.`
@@ -840,6 +995,8 @@ function buildChapterPrompt(
     "- chapterBody should read like a real novel chapter with multiple scene beats.",
     "- Deliver substantial progression so the chapter feels satisfying to read, not like a brief scene.",
     "- Use natural sectioning and pacing; do not force a fixed paragraph count.",
+    "- For opening chapters, start grounded and character-led; earn escalation instead of forcing immediate catastrophe.",
+    "- Avoid repetitive opening templates and avoid copying recurring setup patterns from other books.",
     "- choices must contain exactly 3 concise options for the next chapter.",
     "- Each choice must be 2-3 complete sentences and specific to the chapter's events.",
     "- Each choice should be roughly 16-110 words, concrete, and immediately actionable.",
@@ -859,6 +1016,7 @@ function buildChapterExpansionPrompt(options: {
   currentBody: string;
   currentChoices: string[];
   profile: ChapterGenerationProfile;
+  overusedCharacterNames: string[];
 }) {
   return [
     "Revise and expand this chapter draft.",
@@ -875,10 +1033,16 @@ function buildChapterExpansionPrompt(options: {
     "Current choices:",
     ...options.currentChoices.map((choice) => `- ${choice}`),
     "",
+    options.overusedCharacterNames.length ? "Cross-book originality guard:" : null,
+    options.overusedCharacterNames.length
+      ? `- Avoid promoting these overused names into the central lead role unless canon explicitly requires it: ${options.overusedCharacterNames.join(", ")}`
+      : null,
+    "",
     "Requirements:",
     `- Expand chapterBody to ${options.profile.targetWordsMin} to ${options.profile.targetWordsMax} words.`,
     "- Ensure the expanded chapter feels like a full novel chapter, not a short scene.",
     "- Add meaningful progression, escalation, and consequence so chapter length feels earned.",
+    "- If the opening is overly explosive, rebalance with grounded character context before escalation.",
     "- Keep continuity and core events from the current draft.",
     "- Keep prose quality high and avoid repetition.",
     "- Return exactly 3 strong next-chapter choices.",
@@ -1610,7 +1774,8 @@ export async function startReadingFromLibrary(user: PublicUser, libraryBookId: s
   }
 
   if (detail.chapters.length === 0) {
-    const firstDirection = "Open chapter 1 with a strong hook and clear momentum.";
+    const firstDirection =
+      "Open chapter 1 with grounded character context, vivid atmosphere, and steadily building momentum.";
     const chapter1 = await generateNextChapter({
       user,
       sessionId,
@@ -1660,6 +1825,10 @@ export async function generateNextChapter(options: {
   const chapterCap = detail.libraryBook.chapterCap;
   const generationProfile = resolveChapterGenerationProfile();
   const minimumAcceptedWords = resolveMinimumAcceptedChapterWords(generationProfile);
+  const overusedCharacterNames = await listOverusedCharacterNamesForReader({
+    readerId: options.user.id,
+    currentWorldId: detail.libraryBook.worldId,
+  });
 
   if (chapterCap && detail.chapters.length >= chapterCap) {
     await markSessionCompleted(options.sessionId);
@@ -1684,7 +1853,13 @@ export async function generateNextChapter(options: {
   ) {
     const prompt =
       attempt === 1
-        ? buildChapterPrompt(detail, chapterNumber, direction, generationProfile)
+        ? buildChapterPrompt(
+            detail,
+            chapterNumber,
+            direction,
+            generationProfile,
+            overusedCharacterNames,
+          )
         : buildChapterExpansionPrompt({
             chapterNumber,
             directionInput: direction,
@@ -1692,6 +1867,7 @@ export async function generateNextChapter(options: {
             currentBody: parsed.chapterBody,
             currentChoices: parsed.choiceOptions,
             profile: generationProfile,
+            overusedCharacterNames,
           });
 
     const generated = await generateStoryText({
@@ -1735,6 +1911,7 @@ export async function generateNextChapter(options: {
         currentBody: parsed.chapterBody,
         currentChoices: parsed.choiceOptions,
         profile: generationProfile,
+        overusedCharacterNames,
       }),
       model: options.model,
       maxOutputTokens: generationProfile.maxOutputTokens + 800,
