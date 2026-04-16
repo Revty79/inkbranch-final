@@ -89,6 +89,7 @@ async function initializeSchema() {
       author_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
       title TEXT NOT NULL,
       slug TEXT NOT NULL,
+      genre TEXT,
       premise TEXT,
       chapter_cap INTEGER CHECK (chapter_cap IS NULL OR chapter_cap BETWEEN 1 AND 500),
       reader_agency TEXT,
@@ -177,6 +178,8 @@ async function initializeSchema() {
       ADD COLUMN IF NOT EXISTS choice_options TEXT NOT NULL DEFAULT '[]';
     ALTER TABLE story_worlds
       ADD COLUMN IF NOT EXISTS chapter_cap INTEGER;
+    ALTER TABLE story_worlds
+      ADD COLUMN IF NOT EXISTS genre TEXT;
     ALTER TABLE users
       ADD COLUMN IF NOT EXISTS bookstore_seen_at TIMESTAMPTZ;
     ALTER TABLE story_sessions
@@ -199,6 +202,7 @@ async function initializeSchema() {
     CREATE UNIQUE INDEX IF NOT EXISTS story_worlds_slug_unique_idx ON story_worlds(slug);
     CREATE INDEX IF NOT EXISTS story_worlds_author_updated_idx ON story_worlds(author_id, updated_at DESC);
     CREATE INDEX IF NOT EXISTS story_worlds_status_updated_idx ON story_worlds(status, updated_at DESC);
+    CREATE INDEX IF NOT EXISTS story_worlds_genre_updated_idx ON story_worlds(genre, updated_at DESC);
     CREATE INDEX IF NOT EXISTS world_spine_versions_world_active_idx ON world_spine_versions(world_id, is_active);
     CREATE INDEX IF NOT EXISTS world_rules_spine_type_idx ON world_rules(spine_version_id, rule_type);
     CREATE INDEX IF NOT EXISTS story_sessions_reader_status_idx ON story_sessions(reader_id, status);

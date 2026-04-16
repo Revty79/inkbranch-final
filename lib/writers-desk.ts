@@ -10,6 +10,7 @@ export type WriterDeskWorld = {
   id: string;
   title: string;
   slug: string;
+  genre: string | null;
   status: WorldStatus;
   premise: string | null;
   chapterCap: number | null;
@@ -40,6 +41,7 @@ export type WriterDeskWorldDetail = WriterDeskWorld & {
 type WorldBlueprintCoreInput = {
   title: string;
   slug?: string;
+  genre?: string;
   premise?: string;
   chapterCap?: number | null;
   readerAgency?: string;
@@ -67,6 +69,7 @@ type WorldListRow = {
   id: string;
   title: string;
   slug: string;
+  genre: string | null;
   status: WorldStatus;
   premise: string | null;
   chapter_cap: number | string | null;
@@ -85,6 +88,7 @@ type WorldCoreRow = {
   id: string;
   title: string;
   slug: string;
+  genre: string | null;
   status: WorldStatus;
   premise: string | null;
   chapter_cap: number | string | null;
@@ -194,6 +198,7 @@ function mapWorldListRow(row: WorldListRow): WriterDeskWorld {
     id: row.id,
     title: row.title,
     slug: row.slug,
+    genre: row.genre,
     status: row.status,
     premise: row.premise,
     chapterCap: toNullableNumber(row.chapter_cap),
@@ -300,6 +305,7 @@ async function getAuthorWorldCore(authorId: string, worldId: string) {
         worlds.id,
         worlds.title,
         worlds.slug,
+        worlds.genre,
         worlds.status,
         worlds.premise,
         worlds.chapter_cap,
@@ -334,6 +340,7 @@ export async function listAuthorWorlds(authorId: string): Promise<WriterDeskWorl
         worlds.id,
         worlds.title,
         worlds.slug,
+        worlds.genre,
         worlds.status,
         worlds.premise,
         worlds.chapter_cap,
@@ -357,6 +364,7 @@ export async function listAuthorWorlds(authorId: string): Promise<WriterDeskWorl
         worlds.id,
         worlds.title,
         worlds.slug,
+        worlds.genre,
         worlds.status,
         worlds.premise,
         worlds.chapter_cap,
@@ -454,6 +462,7 @@ export async function createWorldWithInitialSpine(
           author_id,
           title,
           slug,
+          genre,
           premise,
           chapter_cap,
           reader_agency,
@@ -462,13 +471,14 @@ export async function createWorldWithInitialSpine(
           created_at,
           updated_at
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
       `,
       [
         worldId,
         input.authorId,
         input.title.trim(),
         slug,
+        toNullableText(input.genre),
         toNullableText(input.premise),
         toNullableChapterCap(input.chapterCap),
         toNullableText(input.readerAgency),
@@ -592,11 +602,12 @@ export async function updateWorldBlueprint(input: UpdateWorldInput): Promise<Wri
         SET
           title = $3,
           slug = $4,
-          premise = $5,
-          chapter_cap = $6,
-          reader_agency = $7,
-          ai_directive = $8,
-          updated_at = $9
+          genre = $5,
+          premise = $6,
+          chapter_cap = $7,
+          reader_agency = $8,
+          ai_directive = $9,
+          updated_at = $10
         WHERE id = $1
           AND author_id = $2
       `,
@@ -605,6 +616,7 @@ export async function updateWorldBlueprint(input: UpdateWorldInput): Promise<Wri
         input.authorId,
         input.title.trim(),
         slug,
+        toNullableText(input.genre),
         toNullableText(input.premise),
         toNullableChapterCap(input.chapterCap),
         toNullableText(input.readerAgency),

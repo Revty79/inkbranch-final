@@ -31,6 +31,7 @@ const MOBILE_READER_PAGINATION_MAX_WIDTH = 768;
 const READING_ACTIVITY_PING_INTERVAL_MS = 30_000;
 const READING_ACTIVITY_MAX_SECONDS_PER_PING = 45;
 const MAX_VIEWPOINT_DIRECTION_INPUT_LENGTH = 1600;
+const ALL_GENRES_FILTER_VALUE = "__ALL__";
 
 const VIEWPOINT_LENS_OPTIONS: Array<{
   lens: ReaderChapterViewpointLens;
@@ -91,6 +92,103 @@ function formatDate(value: string) {
     day: "numeric",
     year: "numeric",
   }).format(new Date(value));
+}
+
+function getGenreLabel(genre: string | null | undefined) {
+  const trimmed = genre?.trim();
+  return trimmed ? trimmed : "Uncategorized";
+}
+
+function normalizeSearchValue(value: string | null | undefined) {
+  return value?.trim().toLowerCase() ?? "";
+}
+
+function toLibraryBookSearchText(book: LibraryBook) {
+  return [
+    book.title,
+    book.slug,
+    getGenreLabel(book.genre),
+    book.authorName,
+    book.authorEmail,
+    book.premise,
+  ]
+    .filter((value): value is string => Boolean(value))
+    .join(" ")
+    .toLowerCase();
+}
+
+function toCatalogWorldSearchText(world: CatalogWorld) {
+  return [
+    world.title,
+    world.slug,
+    getGenreLabel(world.genre),
+    world.authorName,
+    world.authorEmail,
+    world.premise,
+  ]
+    .filter((value): value is string => Boolean(value))
+    .join(" ")
+    .toLowerCase();
+}
+
+function sortGenreLabels(left: string, right: string) {
+  if (left === right) {
+    return 0;
+  }
+
+  if (left === "Uncategorized") {
+    return 1;
+  }
+
+  if (right === "Uncategorized") {
+    return -1;
+  }
+
+  return left.localeCompare(right);
+}
+
+function groupLibraryBooksByGenre(books: LibraryBook[]) {
+  const groups = new Map<string, LibraryBook[]>();
+
+  for (const book of books) {
+    const genreLabel = getGenreLabel(book.genre);
+    const existing = groups.get(genreLabel);
+
+    if (existing) {
+      existing.push(book);
+    } else {
+      groups.set(genreLabel, [book]);
+    }
+  }
+
+  return [...groups.entries()]
+    .map(([genre, groupedBooks]) => ({
+      genre,
+      books: [...groupedBooks].sort((a, b) => b.addedAt.localeCompare(a.addedAt)),
+    }))
+    .sort((a, b) => sortGenreLabels(a.genre, b.genre));
+}
+
+function groupCatalogWorldsByGenre(worlds: CatalogWorld[]) {
+  const groups = new Map<string, CatalogWorld[]>();
+
+  for (const world of worlds) {
+    const genreLabel = getGenreLabel(world.genre);
+    const existing = groups.get(genreLabel);
+
+    if (existing) {
+      existing.push(world);
+    } else {
+      groups.set(genreLabel, [world]);
+    }
+  }
+
+  return [...groups.entries()]
+    .map(([genre, groupedWorlds]) => ({
+      genre,
+      worlds: [...groupedWorlds].sort((a, b) => a.title.localeCompare(b.title)),
+    }))
+    .sort((a, b) => sortGenreLabels(a.genre, b.genre));
 }
 
 function upsertSessionSummary(
@@ -440,6 +538,14 @@ export function LibraryReaderClient({
   const [isChapterContinuationLocked, setIsChapterContinuationLocked] = useState(false);
   const [isGeneratingViewpoint, setIsGeneratingViewpoint] = useState(false);
   const [message, setMessage] = useState<Message | null>(null);
+  const [librarySearchInput, setLibrarySearchInput] = useState("");
+  const [libraryGenreFilter, setLibraryGenreFilter] = useState(
+    ALL_GENRES_FILTER_VALUE,
+  );
+  const [catalogSearchInput, setCatalogSearchInput] = useState("");
+  const [catalogGenreFilter, setCatalogGenreFilter] = useState(
+    ALL_GENRES_FILTER_VALUE,
+  );
   const [selectedChapterId, setSelectedChapterId] = useState<string | null>(
     initialActiveSession?.chapters[initialActiveSession.chapters.length - 1]?.id ??
       null,
@@ -456,9 +562,63 @@ export function LibraryReaderClient({
   const readerPageTextRef = useRef<HTMLParagraphElement | null>(null);
   const previousSelectedChapterIdRef = useRef<string | null>(null);
 
-  const sortedBooks = useMemo(
-    () => [...books].sort((a, b) => b.addedAt.localeCompare(a.addedAt)),
+  const libraryGenreFilterOptions = useMemo(
+    () =>
+      [...new Set(books.map((book) => getGenreLabel(book.genre)))].sort(
+        sortGenreLabels,
+      ),
     [books],
+  );
+  const catalogGenreFilterOptions = useMemo(
+    () =>
+      [...new Set(catalogWorlds.map((world) => getGenreLabel(world.genre)))].sort(
+        sortGenreLabels,
+      ),
+    [catalogWorlds],
+  );
+  const filteredLibraryBooks = useMemo(() => {
+    const normalizedSearch = normalizeSearchValue(librarySearchInput);
+
+    return books.filter((book) => {
+      if (
+        libraryGenreFilter !== ALL_GENRES_FILTER_VALUE &&
+        getGenreLabel(book.genre) !== libraryGenreFilter
+      ) {
+        return false;
+      }
+
+      if (!normalizedSearch) {
+        return true;
+      }
+
+      return toLibraryBookSearchText(book).includes(normalizedSearch);
+    });
+  }, [books, libraryGenreFilter, librarySearchInput]);
+  const filteredCatalogWorlds = useMemo(() => {
+    const normalizedSearch = normalizeSearchValue(catalogSearchInput);
+
+    return catalogWorlds.filter((world) => {
+      if (
+        catalogGenreFilter !== ALL_GENRES_FILTER_VALUE &&
+        getGenreLabel(world.genre) !== catalogGenreFilter
+      ) {
+        return false;
+      }
+
+      if (!normalizedSearch) {
+        return true;
+      }
+
+      return toCatalogWorldSearchText(world).includes(normalizedSearch);
+    });
+  }, [catalogGenreFilter, catalogSearchInput, catalogWorlds]);
+  const groupedLibraryBooks = useMemo(
+    () => groupLibraryBooksByGenre(filteredLibraryBooks),
+    [filteredLibraryBooks],
+  );
+  const groupedCatalogWorlds = useMemo(
+    () => groupCatalogWorldsByGenre(filteredCatalogWorlds),
+    [filteredCatalogWorlds],
   );
 
   const sortedSessions = useMemo(
@@ -1695,49 +1855,93 @@ export function LibraryReaderClient({
             </button>
           </div>
 
+          <div className="mt-4 grid gap-3 sm:grid-cols-[minmax(0,1fr)_220px]">
+            <label className="space-y-1 text-sm">
+              <span className="parchment-label block text-sm font-medium">
+                Search shelf
+              </span>
+              <input
+                type="text"
+                value={librarySearchInput}
+                onChange={(event) => setLibrarySearchInput(event.target.value)}
+                placeholder="Title, genre, author, premise..."
+                className="parchment-input w-full rounded-lg px-3 py-2 text-sm outline-none"
+              />
+            </label>
+
+            <label className="space-y-1 text-sm">
+              <span className="parchment-label block text-sm font-medium">Genre</span>
+              <select
+                value={libraryGenreFilter}
+                onChange={(event) => setLibraryGenreFilter(event.target.value)}
+                className="parchment-input w-full rounded-lg px-3 py-2 text-sm outline-none"
+              >
+                <option value={ALL_GENRES_FILTER_VALUE}>All genres</option>
+                {libraryGenreFilterOptions.map((genre) => (
+                  <option key={genre} value={genre}>
+                    {genre}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+
           <div className="mt-4 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-            {sortedBooks.length === 0 ? (
+            {books.length === 0 ? (
               <p className="rounded-lg border border-[var(--parchment-border)] bg-[var(--parchment-soft)] px-3 py-3 text-sm text-[var(--ink-muted)] md:col-span-2 xl:col-span-3">
                 No books in library yet.
               </p>
+            ) : filteredLibraryBooks.length === 0 ? (
+              <p className="rounded-lg border border-[var(--parchment-border)] bg-[var(--parchment-soft)] px-3 py-3 text-sm text-[var(--ink-muted)] md:col-span-2 xl:col-span-3">
+                No library books match your search or genre filter.
+              </p>
             ) : (
-              sortedBooks.map((book) => (
-                <article
-                  key={book.id}
-                  className="book-card book-card-library"
-                >
-                  <div className="relative z-10">
-                    <p className="book-card-kicker">
-                      {book.authorName?.trim() || book.authorEmail}
-                    </p>
-                    <h4 className="book-card-title">{book.title}</h4>
-                    <p className="book-card-description">
-                      {book.premise?.trim()
-                        ? book.premise
-                        : "No brief description yet. Start reading to build your chapter journey."}
-                    </p>
+              groupedLibraryBooks.map((group) => (
+                <div key={group.genre} className="md:col-span-2 xl:col-span-3">
+                  <p className="mb-3 text-xs tracking-[0.12em] text-[var(--ink-muted)] uppercase">
+                    {group.genre}
+                  </p>
+                  <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+                    {group.books.map((book) => (
+                      <article
+                        key={book.id}
+                        className="book-card book-card-library"
+                      >
+                        <div className="relative z-10">
+                          <p className="book-card-kicker">
+                            {book.authorName?.trim() || book.authorEmail}
+                          </p>
+                          <h4 className="book-card-title">{book.title}</h4>
+                          <p className="book-card-description">
+                            {book.premise?.trim()
+                              ? book.premise
+                              : "No brief description yet. Start reading to build your chapter journey."}
+                          </p>
+                        </div>
+                        <div className="relative z-10 mt-5 flex items-end justify-between gap-3">
+                          <span className="book-card-status">
+                            {book.activeSessionId ? "In progress" : "Ready to read"}
+                          </span>
+                          <button
+                            type="button"
+                            disabled={Boolean(isStartingBookId)}
+                            onClick={() => {
+                              void handleStartReading(book.id);
+                            }}
+                            className="rounded-full border border-[rgba(248,239,219,0.55)] px-3 py-1.5 text-xs font-semibold text-[rgba(248,239,219,0.95)] transition hover:bg-[rgba(255,255,255,0.14)] disabled:cursor-not-allowed disabled:opacity-70"
+                            title={`Added ${formatDate(book.addedAt)} | Chapters read ${book.activeChapterCount}`}
+                          >
+                            {isStartingBookId === book.id
+                              ? "Opening..."
+                              : book.activeSessionId
+                                ? "Continue Reading"
+                                : "Read From Library"}
+                          </button>
+                        </div>
+                      </article>
+                    ))}
                   </div>
-                  <div className="relative z-10 mt-5 flex items-end justify-between gap-3">
-                    <span className="book-card-status">
-                      {book.activeSessionId ? "In progress" : "Ready to read"}
-                    </span>
-                    <button
-                      type="button"
-                      disabled={Boolean(isStartingBookId)}
-                      onClick={() => {
-                        void handleStartReading(book.id);
-                      }}
-                      className="rounded-full border border-[rgba(248,239,219,0.55)] px-3 py-1.5 text-xs font-semibold text-[rgba(248,239,219,0.95)] transition hover:bg-[rgba(255,255,255,0.14)] disabled:cursor-not-allowed disabled:opacity-70"
-                      title={`Added ${formatDate(book.addedAt)} | Chapters read ${book.activeChapterCount}`}
-                    >
-                      {isStartingBookId === book.id
-                        ? "Opening..."
-                        : book.activeSessionId
-                          ? "Continue Reading"
-                          : "Read From Library"}
-                    </button>
-                  </div>
-                </article>
+                </div>
               ))
             )}
           </div>
@@ -1745,42 +1949,86 @@ export function LibraryReaderClient({
 
         <article className="parchment-card rounded-2xl p-5 shadow-lg">
           <h4 className="text-xl font-semibold">Add From Catalog</h4>
+          <div className="mt-3 grid gap-3 sm:grid-cols-[minmax(0,1fr)_220px]">
+            <label className="space-y-1 text-sm">
+              <span className="parchment-label block text-sm font-medium">
+                Search catalog
+              </span>
+              <input
+                type="text"
+                value={catalogSearchInput}
+                onChange={(event) => setCatalogSearchInput(event.target.value)}
+                placeholder="Title, genre, author, premise..."
+                className="parchment-input w-full rounded-lg px-3 py-2 text-sm outline-none"
+              />
+            </label>
+
+            <label className="space-y-1 text-sm">
+              <span className="parchment-label block text-sm font-medium">Genre</span>
+              <select
+                value={catalogGenreFilter}
+                onChange={(event) => setCatalogGenreFilter(event.target.value)}
+                className="parchment-input w-full rounded-lg px-3 py-2 text-sm outline-none"
+              >
+                <option value={ALL_GENRES_FILTER_VALUE}>All genres</option>
+                {catalogGenreFilterOptions.map((genre) => (
+                  <option key={genre} value={genre}>
+                    {genre}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+
           <div className="mt-3 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
             {catalogWorlds.length === 0 ? (
               <p className="rounded-lg border border-[var(--parchment-border)] bg-[var(--parchment-soft)] px-3 py-3 text-sm text-[var(--ink-muted)] md:col-span-2 xl:col-span-3">
                 No additional books available to add.
               </p>
+            ) : filteredCatalogWorlds.length === 0 ? (
+              <p className="rounded-lg border border-[var(--parchment-border)] bg-[var(--parchment-soft)] px-3 py-3 text-sm text-[var(--ink-muted)] md:col-span-2 xl:col-span-3">
+                No catalog books match your search or genre filter.
+              </p>
             ) : (
-              catalogWorlds.map((world) => (
-                <article
-                  key={world.id}
-                  className="book-card book-card-bookstore"
-                >
-                  <div className="relative z-10">
-                    <p className="book-card-kicker">
-                      {world.authorName?.trim() || world.authorEmail}
-                    </p>
-                    <p className="book-card-title">{world.title}</p>
-                    <p className="book-card-description">
-                      {world.premise?.trim()
-                        ? world.premise
-                        : "No brief description provided yet."}
-                    </p>
+              groupedCatalogWorlds.map((group) => (
+                <div key={group.genre} className="md:col-span-2 xl:col-span-3">
+                  <p className="mb-3 text-xs tracking-[0.12em] text-[var(--ink-muted)] uppercase">
+                    {group.genre}
+                  </p>
+                  <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+                    {group.worlds.map((world) => (
+                      <article
+                        key={world.id}
+                        className="book-card book-card-bookstore"
+                      >
+                        <div className="relative z-10">
+                          <p className="book-card-kicker">
+                            {world.authorName?.trim() || world.authorEmail}
+                          </p>
+                          <p className="book-card-title">{world.title}</p>
+                          <p className="book-card-description">
+                            {world.premise?.trim()
+                              ? world.premise
+                              : "No brief description provided yet."}
+                          </p>
+                        </div>
+                        <div className="relative z-10 mt-5 flex items-end justify-between gap-3">
+                          <span className="book-card-status">Available</span>
+                          <button
+                            type="button"
+                            disabled={Boolean(isAddingWorldId)}
+                            onClick={() => {
+                              void handleAddToLibrary(world.id);
+                            }}
+                            className="rounded-full border border-[rgba(248,239,219,0.55)] px-3 py-1.5 text-xs font-semibold text-[rgba(248,239,219,0.95)] transition hover:bg-[rgba(255,255,255,0.14)] disabled:cursor-not-allowed disabled:opacity-70"
+                          >
+                            {isAddingWorldId === world.id ? "Adding..." : "Add To Library"}
+                          </button>
+                        </div>
+                      </article>
+                    ))}
                   </div>
-                  <div className="relative z-10 mt-5 flex items-end justify-between gap-3">
-                    <span className="book-card-status">Available</span>
-                  <button
-                    type="button"
-                    disabled={Boolean(isAddingWorldId)}
-                    onClick={() => {
-                      void handleAddToLibrary(world.id);
-                    }}
-                    className="rounded-full border border-[rgba(248,239,219,0.55)] px-3 py-1.5 text-xs font-semibold text-[rgba(248,239,219,0.95)] transition hover:bg-[rgba(255,255,255,0.14)] disabled:cursor-not-allowed disabled:opacity-70"
-                  >
-                    {isAddingWorldId === world.id ? "Adding..." : "Add To Library"}
-                  </button>
-                  </div>
-                </article>
+                </div>
               ))
             )}
           </div>

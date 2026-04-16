@@ -16,6 +16,7 @@ CREATE TABLE IF NOT EXISTS story_worlds (
   author_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   title TEXT NOT NULL,
   slug TEXT NOT NULL,
+  genre TEXT,
   premise TEXT,
   chapter_cap INTEGER CHECK (chapter_cap IS NULL OR chapter_cap BETWEEN 1 AND 500),
   reader_agency TEXT,
@@ -28,6 +29,7 @@ CREATE TABLE IF NOT EXISTS story_worlds (
 CREATE UNIQUE INDEX IF NOT EXISTS story_worlds_slug_unique_idx ON story_worlds(slug);
 CREATE INDEX IF NOT EXISTS story_worlds_author_updated_idx ON story_worlds(author_id, updated_at DESC);
 CREATE INDEX IF NOT EXISTS story_worlds_status_updated_idx ON story_worlds(status, updated_at DESC);
+CREATE INDEX IF NOT EXISTS story_worlds_genre_updated_idx ON story_worlds(genre, updated_at DESC);
 
 CREATE TABLE IF NOT EXISTS world_spine_versions (
   id TEXT PRIMARY KEY,

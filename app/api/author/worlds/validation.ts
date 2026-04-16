@@ -1,6 +1,7 @@
 export type WorldBlueprintRequestBody = {
   title?: unknown;
   slug?: unknown;
+  genre?: unknown;
   premise?: unknown;
   chapterCap?: unknown;
   readerAgency?: unknown;
@@ -18,6 +19,7 @@ export type WorldBlueprintRequestBody = {
 export const MAX_TEXT_LENGTH = 3000;
 export const MAX_RULE_COUNT_PER_TYPE = 40;
 export const MAX_CHAPTER_CAP = 500;
+export const MAX_GENRE_LENGTH = 80;
 
 export class ValidationError extends Error {}
 
@@ -103,9 +105,14 @@ export function validateWorldBlueprintBody(raw: WorldBlueprintRequestBody) {
   }
 
   const slug = readOptionalText(raw.slug);
+  const genre = readOptionalText(raw.genre);
 
   if (slug.length > 80) {
     throwValidationError("Slug must be 80 characters or less.");
+  }
+
+  if (genre.length > MAX_GENRE_LENGTH) {
+    throwValidationError(`Genre must be ${MAX_GENRE_LENGTH} characters or less.`);
   }
 
   const premise = readOptionalText(raw.premise);
@@ -158,6 +165,7 @@ export function validateWorldBlueprintBody(raw: WorldBlueprintRequestBody) {
   return {
     title,
     slug,
+    genre,
     premise,
     chapterCap,
     readerAgency,

@@ -12,6 +12,7 @@ export type LibraryBook = {
   worldId: string;
   title: string;
   slug: string;
+  genre: string | null;
   premise: string | null;
   chapterCap: number | null;
   status: "DRAFT" | "PUBLISHED" | "ARCHIVED";
@@ -27,6 +28,7 @@ export type CatalogWorld = {
   id: string;
   title: string;
   slug: string;
+  genre: string | null;
   premise: string | null;
   status: "DRAFT" | "PUBLISHED" | "ARCHIVED";
   authorName: string | null;
@@ -37,6 +39,7 @@ export type BookstoreBook = {
   id: string;
   title: string;
   slug: string;
+  genre: string | null;
   premise: string | null;
   status: "DRAFT" | "PUBLISHED" | "ARCHIVED";
   authorName: string | null;
@@ -110,6 +113,7 @@ type LibraryBookRow = {
   world_id: string;
   title: string;
   slug: string;
+  genre: string | null;
   premise: string | null;
   chapter_cap: number | string | null;
   status: "DRAFT" | "PUBLISHED" | "ARCHIVED";
@@ -125,6 +129,7 @@ type CatalogWorldRow = {
   id: string;
   title: string;
   slug: string;
+  genre: string | null;
   premise: string | null;
   status: "DRAFT" | "PUBLISHED" | "ARCHIVED";
   author_name: string | null;
@@ -155,6 +160,7 @@ type SessionCoreRow = {
   world_id: string;
   world_title: string;
   world_slug: string;
+  world_genre: string | null;
   world_status: "DRAFT" | "PUBLISHED" | "ARCHIVED";
   world_premise: string | null;
   world_chapter_cap: number | string | null;
@@ -1220,6 +1226,7 @@ function toLibraryBook(row: LibraryBookRow): LibraryBook {
     worldId: row.world_id,
     title: row.title,
     slug: row.slug,
+    genre: row.genre,
     premise: row.premise,
     chapterCap: toNullableNumber(row.chapter_cap),
     status: row.status,
@@ -1727,6 +1734,7 @@ export async function listLibraryBooks(user: PublicUser): Promise<LibraryBook[]>
         lb.world_id,
         worlds.title,
         worlds.slug,
+        worlds.genre,
         worlds.premise,
         worlds.chapter_cap,
         worlds.status,
@@ -1758,7 +1766,9 @@ export async function listLibraryBooks(user: PublicUser): Promise<LibraryBook[]>
       ) AS active_session_chapters
         ON TRUE
       WHERE lb.user_id = $1
-      ORDER BY lb.created_at DESC
+      ORDER BY
+        COALESCE(NULLIF(TRIM(worlds.genre), ''), 'Uncategorized') ASC,
+        lb.created_at DESC
     `,
     [user.id],
   );
@@ -1774,6 +1784,7 @@ export async function listLibraryCatalogWorlds(user: PublicUser): Promise<Catalo
         worlds.id,
         worlds.title,
         worlds.slug,
+        worlds.genre,
         worlds.premise,
         worlds.status,
         authors.name AS author_name,
@@ -1792,7 +1803,9 @@ export async function listLibraryCatalogWorlds(user: PublicUser): Promise<Catalo
           OR ($1 = 'AUTHOR' AND (worlds.status = 'PUBLISHED' OR worlds.author_id = $2))
           OR ($1 = 'READER' AND worlds.status = 'PUBLISHED')
         )
-      ORDER BY worlds.updated_at DESC
+      ORDER BY
+        COALESCE(NULLIF(TRIM(worlds.genre), ''), 'Uncategorized') ASC,
+        worlds.updated_at DESC
     `,
     [user.role, user.id],
   );
@@ -1801,6 +1814,7 @@ export async function listLibraryCatalogWorlds(user: PublicUser): Promise<Catalo
     id: row.id,
     title: row.title,
     slug: row.slug,
+    genre: row.genre,
     premise: row.premise,
     status: row.status,
     authorName: row.author_name,
@@ -1816,6 +1830,7 @@ export async function listBookstoreBooks(user: PublicUser): Promise<BookstoreBoo
         worlds.id,
         worlds.title,
         worlds.slug,
+        worlds.genre,
         worlds.premise,
         worlds.status,
         authors.name AS author_name,
@@ -1832,7 +1847,9 @@ export async function listBookstoreBooks(user: PublicUser): Promise<BookstoreBoo
         OR ($1 = 'AUTHOR' AND (worlds.status = 'PUBLISHED' OR worlds.author_id = $2))
         OR ($1 = 'READER' AND worlds.status = 'PUBLISHED')
       )
-      ORDER BY worlds.updated_at DESC
+      ORDER BY
+        COALESCE(NULLIF(TRIM(worlds.genre), ''), 'Uncategorized') ASC,
+        worlds.updated_at DESC
     `,
     [user.role, user.id],
   );
@@ -1841,6 +1858,7 @@ export async function listBookstoreBooks(user: PublicUser): Promise<BookstoreBoo
     id: row.id,
     title: row.title,
     slug: row.slug,
+    genre: row.genre,
     premise: row.premise,
     status: row.status,
     authorName: row.author_name,
@@ -2005,6 +2023,7 @@ export async function getReaderSessionDetail(
         worlds.id AS world_id,
         worlds.title AS world_title,
         worlds.slug AS world_slug,
+        worlds.genre AS world_genre,
         worlds.status AS world_status,
         worlds.premise AS world_premise,
         worlds.chapter_cap AS world_chapter_cap,
@@ -2189,6 +2208,7 @@ export async function getReaderSessionDetail(
     worldId: core.world_id,
     title: core.world_title,
     slug: core.world_slug,
+    genre: core.world_genre,
     premise: core.world_premise,
     chapterCap: toNullableNumber(core.world_chapter_cap),
     status: core.world_status,

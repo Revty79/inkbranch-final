@@ -43,6 +43,7 @@ export const storyWorlds = pgTable(
       .references(() => users.id, { onDelete: "cascade" }),
     title: text("title").notNull(),
     slug: text("slug").notNull(),
+    genre: text("genre"),
     premise: text("premise"),
     chapterCap: integer("chapter_cap"),
     readerAgency: text("reader_agency"),
@@ -65,6 +66,7 @@ export const storyWorlds = pgTable(
     uniqueIndex("story_worlds_slug_unique_idx").on(table.slug),
     index("story_worlds_author_updated_idx").on(table.authorId, table.updatedAt),
     index("story_worlds_status_updated_idx").on(table.status, table.updatedAt),
+    index("story_worlds_genre_updated_idx").on(table.genre, table.updatedAt),
   ],
 );
 

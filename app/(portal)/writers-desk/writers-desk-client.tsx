@@ -8,6 +8,7 @@ type DeskWorld = {
   id: string;
   title: string;
   slug: string;
+  genre: string | null;
   status: WorldStatus;
   premise: string | null;
   chapterCap: number | null;
@@ -44,8 +45,69 @@ type Props = {
   initialWorlds: DeskWorld[];
 };
 
+const WORLD_GENRE_OPTIONS = [
+  "Fantasy",
+  "Science Fiction",
+  "Mystery",
+  "Thriller",
+  "Horror",
+  "Romance",
+  "Historical Fiction",
+  "Adventure",
+  "Literary Fiction",
+  "Young Adult",
+  "Dystopian",
+  "Magical Realism",
+  "Paranormal",
+  "Crime",
+  "Action",
+  "Drama",
+  "Western",
+  "Satire",
+  "Poetry",
+  "Nonfiction",
+] as const;
+const OTHER_GENRE_VALUE = "__OTHER__";
+
 function formatStatus(status: WorldStatus) {
   return status.charAt(0) + status.slice(1).toLowerCase();
+}
+
+function normalizeGenre(genre: string | null | undefined) {
+  const trimmed = genre?.trim();
+  return trimmed ? trimmed : null;
+}
+
+function getGenreBadgeLabel(genre: string | null | undefined) {
+  return normalizeGenre(genre) ?? "Uncategorized";
+}
+
+function resolveGenreEditorState(genre: string | null | undefined) {
+  const normalized = normalizeGenre(genre);
+
+  if (!normalized) {
+    return {
+      selectedGenre: "",
+      customGenre: "",
+    };
+  }
+
+  const matchingPreset =
+    WORLD_GENRE_OPTIONS.find(
+      (option) => option.toLowerCase() === normalized.toLowerCase(),
+    ) ?? null;
+
+  if (matchingPreset) {
+    return {
+      selectedGenre: matchingPreset,
+      customGenre: "",
+    };
+  }
+
+  return {
+    selectedGenre: OTHER_GENRE_VALUE,
+    customGenre: normalized,
+  };
 }
 
 function formatDate(value: string) {
@@ -83,6 +145,8 @@ export function WritersDeskClient({ initialWorlds }: Props) {
   const [editingWorldId, setEditingWorldId] = useState<string | null>(null);
   const [title, setTitle] = useState("");
   const [slug, setSlug] = useState("");
+  const [selectedGenre, setSelectedGenre] = useState("");
+  const [customGenre, setCustomGenre] = useState("");
   const [premise, setPremise] = useState("");
   const [chapterCapInput, setChapterCapInput] = useState("");
   const [readerAgency, setReaderAgency] = useState("");
@@ -109,6 +173,8 @@ export function WritersDeskClient({ initialWorlds }: Props) {
     setEditingWorldId(null);
     setTitle("");
     setSlug("");
+    setSelectedGenre("");
+    setCustomGenre("");
     setPremise("");
     setChapterCapInput("");
     setReaderAgency("");
@@ -129,6 +195,19 @@ export function WritersDeskClient({ initialWorlds }: Props) {
     setIsSubmitting(true);
     setMessage(null);
 
+    if (selectedGenre === OTHER_GENRE_VALUE && !customGenre.trim()) {
+      setMessage({
+        type: "error",
+        text: "Choose a genre or enter a custom genre.",
+      });
+      setIsSubmitting(false);
+      return;
+    }
+
+    const genre =
+      selectedGenre === OTHER_GENRE_VALUE
+        ? customGenre.trim()
+        : selectedGenre.trim();
     const chapterCap = chapterCapInput.trim() ? Number(chapterCapInput) : null;
     const method = editingWorldId ? "PUT" : "POST";
     const endpoint = editingWorldId
@@ -144,6 +223,7 @@ export function WritersDeskClient({ initialWorlds }: Props) {
         body: JSON.stringify({
           title,
           slug,
+          genre,
           premise,
           chapterCap,
           readerAgency,
@@ -215,9 +295,12 @@ export function WritersDeskClient({ initialWorlds }: Props) {
       }
 
       const world = payload.world;
+      const genreEditorState = resolveGenreEditorState(world.genre);
       setEditingWorldId(world.id);
       setTitle(world.title);
       setSlug(world.slug);
+      setSelectedGenre(genreEditorState.selectedGenre);
+      setCustomGenre(genreEditorState.customGenre);
       setPremise(world.premise ?? "");
       setChapterCapInput(
         typeof world.chapterCap === "number" ? String(world.chapterCap) : "",
@@ -359,6 +442,40 @@ export function WritersDeskClient({ initialWorlds }: Props) {
               className="parchment-input w-full rounded-lg px-3 py-2 text-sm outline-none"
               maxLength={80}
             />
+
+            <label className="parchment-label block text-sm font-medium">Genre</label>
+            <select
+              value={selectedGenre}
+              onChange={(event) => {
+                const nextValue = event.target.value;
+                setSelectedGenre(nextValue);
+
+                if (nextValue !== OTHER_GENRE_VALUE) {
+                  setCustomGenre("");
+                }
+              }}
+              className="parchment-input w-full rounded-lg px-3 py-2 text-sm outline-none"
+            >
+              <option value="">Uncategorized</option>
+              {WORLD_GENRE_OPTIONS.map((genreOption) => (
+                <option key={genreOption} value={genreOption}>
+                  {genreOption}
+                </option>
+              ))}
+              <option value={OTHER_GENRE_VALUE}>Other</option>
+            </select>
+
+            {selectedGenre === OTHER_GENRE_VALUE ? (
+              <input
+                type="text"
+                value={customGenre}
+                onChange={(event) => setCustomGenre(event.target.value)}
+                placeholder="Enter custom genre"
+                className="parchment-input w-full rounded-lg px-3 py-2 text-sm outline-none"
+                maxLength={80}
+                required
+              />
+            ) : null}
 
             <label className="parchment-label block text-sm font-medium">Premise</label>
             <textarea
@@ -563,6 +680,9 @@ export function WritersDeskClient({ initialWorlds }: Props) {
                     </span>
                     <span className="rounded-full border border-[var(--parchment-border)] bg-white/45 px-2 py-0.5">
                       {getRulesBadgeLabel(world.ruleCounts.total)}
+                    </span>
+                    <span className="rounded-full border border-[var(--parchment-border)] bg-white/45 px-2 py-0.5">
+                      {getGenreBadgeLabel(world.genre)}
                     </span>
                     <span className="rounded-full border border-[var(--parchment-border)] bg-white/45 px-2 py-0.5">
                       {typeof world.chapterCap === "number"
