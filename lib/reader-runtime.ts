@@ -214,6 +214,93 @@ type PriorChapterTextRow = {
   ai_response: string;
 };
 
+type PriorOpeningChapterTextRow = {
+  ai_response: string;
+};
+
+type SessionCanonBaselineRow = {
+  source_chapter_id: string | null;
+  source_chapter_number: number | string;
+  chapter_one_summary: string | null;
+  lead_character_names: string | null;
+  notable_place_names: string | null;
+  canonical_facts: string | null;
+  created_at: Date | string;
+  updated_at: Date | string;
+};
+
+type SessionChapterSnapshotRow = {
+  chapter_number: number | string;
+  chapter_title: string;
+  opening_state: string | null;
+  ending_state: string | null;
+  active_character_names: string | null;
+  active_place_names: string | null;
+  unresolved_threads: string | null;
+  major_events: string | null;
+  created_at: Date | string;
+};
+
+type SessionEventLedgerRow = {
+  chapter_number: number | string;
+  event_kind: string;
+  summary: string;
+  subject_key: string | null;
+  importance: number | string | null;
+  created_at: Date | string;
+};
+
+type CanonBaselineState = {
+  sourceChapterId: string | null;
+  sourceChapterNumber: number;
+  chapterOneSummary: string | null;
+  leadCharacterNames: string[];
+  notablePlaceNames: string[];
+  canonicalFacts: string[];
+};
+
+type SessionSnapshotState = {
+  chapterNumber: number;
+  chapterTitle: string;
+  openingState: string | null;
+  endingState: string | null;
+  activeCharacterNames: string[];
+  activePlaceNames: string[];
+  unresolvedThreads: string[];
+  majorEvents: string[];
+  createdAt: string;
+};
+
+type SessionEventState = {
+  chapterNumber: number;
+  eventKind: "EVENT" | "REVEAL" | "COMMITMENT" | "STATE_CHANGE" | "CLIFFHANGER";
+  summary: string;
+  subjectKey: string | null;
+  importance: number;
+  createdAt: string;
+};
+
+type SessionCanonContext = {
+  baseline: CanonBaselineState | null;
+  latestSnapshot: SessionSnapshotState | null;
+  recentSnapshots: SessionSnapshotState[];
+  recentEvents: SessionEventState[];
+  unresolvedThreads: string[];
+  knownCharacterNames: string[];
+  knownPlaceNames: string[];
+};
+
+type ChapterStateSignals = {
+  chapterSummary: string;
+  leadCharacterNames: string[];
+  activeCharacterNames: string[];
+  activePlaceNames: string[];
+  openingState: string | null;
+  endingState: string | null;
+  unresolvedThreads: string[];
+  majorEvents: string[];
+};
+
 type ParsedChapterOutput = {
   chapterTitle: string;
   chapterBody: string;
@@ -299,6 +386,15 @@ const MAX_READING_ACTIVITY_SECONDS_PER_UPDATE = 300;
 const OVERUSED_NAME_SCAN_CHAPTER_LIMIT = 36;
 const OVERUSED_NAME_MIN_CHAPTERS = 3;
 const OVERUSED_NAME_MAX_RESULTS = 8;
+const CROSS_BOOK_OPENING_SCAN_CHAPTER_LIMIT = 60;
+const CROSS_BOOK_BLOCKED_LEAD_NAME_MAX_RESULTS = 16;
+const CHAPTER_OPENING_NAME_SCAN_WORD_LIMIT = 320;
+const CHAPTER_OPENING_CONTEXT_WORD_LIMIT = 260;
+const SESSION_CANON_CONTEXT_SNAPSHOT_LIMIT = 4;
+const SESSION_CANON_CONTEXT_EVENT_LIMIT = 12;
+const SESSION_CANON_MAX_LIST_ITEMS = 12;
+const SNAPSHOT_EVENT_MAX_ITEMS = 6;
+const SNAPSHOT_SENTENCE_MAX_LENGTH = 260;
 const MAX_CHARACTER_CANDIDATES_PER_CHAPTER = 10;
 const VIEWPOINT_GENERATION_ATTEMPTS = 3;
 const VIEWPOINT_GENERATION_PROFILES: Record<
@@ -345,6 +441,66 @@ const LIKELY_CHARACTER_NAME_PATTERN = new RegExp(
 );
 const HONORIFIC_NAME_PATTERN =
   /\b(?:Mr|Mrs|Ms|Dr)\.\s+([A-Z][a-z]{2,}(?:\s+[A-Z][a-z]{2,})?)\b/g;
+const OPENING_CHARACTER_PREPOSITION_PATTERN =
+  /\b(?:for|with|about|like)\s+([A-Z][a-z]{2,}(?:\s+[A-Z][a-z]{2,})?)\b/g;
+const POSSESSIVE_NAME_PATTERN =
+  /\b([A-Z][a-z]{2,}(?:\s+[A-Z][a-z]{2,})?)(?:'s|\u2019s)\b/g;
+const LIKELY_PLACE_NAME_PATTERN =
+  /\b(?:in|at|to|from|into|inside|outside|near|across|beneath|above|under|within|toward|towards|around|along|through|beyond|past)\s+([A-Z][a-z]{2,}(?:\s+[A-Z][a-z]{2,}){0,2})\b/g;
+const TRANSITION_CUE_PATTERN =
+  /\b(?:later|hours later|days later|by morning|by dawn|by dusk|meanwhile|afterward|afterwards|the next day|that night|at sunrise|at sunset|following this)\b/i;
+const CHOICE_VAGUE_STYLE_PATTERNS = [
+  /\bcentral stakes?\b/i,
+  /\bstrategic(?:\s+\w+)?\b/i,
+  /\breshape your position\b/i,
+  /\bdefine the(?:\s+\w+)? stakes?\b/i,
+  /\bsecure leverage\b/i,
+  /\bopposition can regroup\b/i,
+  /\bpublic decision tied to\b/i,
+  /\bfallout could\b/i,
+  /\bcovert and risky approach\b/i,
+  /\bcostly strategic choice\b/i,
+  /\bdefer(?:ring)? the decision\b/i,
+];
+const CHOICE_ANCHOR_STOPWORDS = new Set([
+  "the",
+  "and",
+  "for",
+  "with",
+  "from",
+  "that",
+  "this",
+  "into",
+  "your",
+  "you",
+  "they",
+  "them",
+  "then",
+  "there",
+  "their",
+  "what",
+  "when",
+  "will",
+  "could",
+  "would",
+  "should",
+  "about",
+  "after",
+  "before",
+  "while",
+  "through",
+  "because",
+  "against",
+  "chapter",
+  "story",
+  "conflict",
+  "stakes",
+  "threat",
+  "truth",
+  "choice",
+  "decision",
+  "future",
+]);
 const NON_CHARACTER_NAME_TOKENS = new Set([
   "chapter",
   "prologue",
@@ -438,6 +594,39 @@ const NON_CHARACTER_GENERIC_LABEL_TOKENS = new Set([
   "sister",
   "brother",
 ]);
+const NON_PLACE_NAME_TOKENS = new Set([
+  "chapter",
+  "prologue",
+  "epilogue",
+  "monday",
+  "tuesday",
+  "wednesday",
+  "thursday",
+  "friday",
+  "saturday",
+  "sunday",
+  "january",
+  "february",
+  "march",
+  "april",
+  "may",
+  "june",
+  "july",
+  "august",
+  "september",
+  "october",
+  "november",
+  "december",
+  "north",
+  "south",
+  "east",
+  "west",
+  "morning",
+  "evening",
+  "night",
+  "dawn",
+  "dusk",
+]);
 const CHARACTER_TITLE_PREFIX_TOKENS = new Set([
   "lady",
   "lord",
@@ -530,6 +719,99 @@ function toCharacterIdentityKey(name: string) {
   }
 
   return parts.join(" ");
+}
+
+function choosePreferredCharacterDisplayName(currentName: string, nextName: string) {
+  const currentNormalized = normalizeViewpointCharacterName(currentName);
+  const nextNormalized = normalizeViewpointCharacterName(nextName);
+
+  if (!currentNormalized) {
+    return nextNormalized;
+  }
+
+  if (!nextNormalized) {
+    return currentNormalized;
+  }
+
+  const currentParts = currentNormalized.split(/\s+/).filter(Boolean);
+  const nextParts = nextNormalized.split(/\s+/).filter(Boolean);
+
+  if (nextParts.length > currentParts.length) {
+    return nextNormalized;
+  }
+
+  if (currentParts.length > nextParts.length) {
+    return currentNormalized;
+  }
+
+  return nextNormalized.length > currentNormalized.length
+    ? nextNormalized
+    : currentNormalized;
+}
+
+function areCharacterIdentityEquivalent(left: string, right: string) {
+  const leftKey = toCharacterIdentityKey(left);
+  const rightKey = toCharacterIdentityKey(right);
+
+  if (!leftKey || !rightKey) {
+    return false;
+  }
+
+  if (leftKey === rightKey) {
+    return true;
+  }
+
+  const leftParts = leftKey.split(/\s+/).filter(Boolean);
+  const rightParts = rightKey.split(/\s+/).filter(Boolean);
+
+  if (leftParts.length === 0 || rightParts.length === 0) {
+    return false;
+  }
+
+  if (leftParts[0] !== rightParts[0]) {
+    return false;
+  }
+
+  // Treat single-token names as aliases of fuller forms (e.g. "Elias" vs "Elias Thorne").
+  if (leftParts.length === 1 || rightParts.length === 1) {
+    return true;
+  }
+
+  return false;
+}
+
+function mergeCharacterNamesForViewpointSection(...groups: Array<readonly string[]>) {
+  const merged: string[] = [];
+
+  for (const group of groups) {
+    for (const rawName of group) {
+      const normalized = normalizeViewpointCharacterName(rawName);
+
+      if (!normalized) {
+        continue;
+      }
+
+      const existingIndex = merged.findIndex((candidate) =>
+        areCharacterIdentityEquivalent(candidate, normalized),
+      );
+
+      if (existingIndex >= 0) {
+        merged[existingIndex] = choosePreferredCharacterDisplayName(
+          merged[existingIndex],
+          normalized,
+        );
+        continue;
+      }
+
+      merged.push(normalized);
+
+      if (merged.length >= MAX_CHARACTER_CANDIDATES_PER_CHAPTER) {
+        return merged;
+      }
+    }
+  }
+
+  return merged;
 }
 
 function toViewpointLens(input: string | null | undefined): ReaderChapterViewpointLens {
@@ -776,6 +1058,548 @@ function listCharacterCandidatesFromChapter(chapterTitle: string, chapterBody: s
   return mergeDistinctCharacterNames(fromBody, fromTitle);
 }
 
+function listOpeningCharacterNames(chapterBody: string) {
+  const normalized = normalizeChapterBody(chapterBody);
+
+  if (!normalized) {
+    return [];
+  }
+
+  const openingExcerpt = normalized
+    .split(/\s+/)
+    .slice(0, CHAPTER_OPENING_NAME_SCAN_WORD_LIMIT)
+    .join(" ");
+
+  const fromActionVerbs = extractLikelyCharacterNames(openingExcerpt);
+  const fromPrepositionContext: string[] = [];
+  const fromPossessives: string[] = [];
+  let match: RegExpExecArray | null = null;
+
+  OPENING_CHARACTER_PREPOSITION_PATTERN.lastIndex = 0;
+
+  while ((match = OPENING_CHARACTER_PREPOSITION_PATTERN.exec(openingExcerpt)) !== null) {
+    const candidate = normalizeViewpointCharacterName(match[1] ?? "");
+
+    if (candidate && isLikelyCharacterName(candidate)) {
+      fromPrepositionContext.push(candidate);
+    }
+  }
+
+  POSSESSIVE_NAME_PATTERN.lastIndex = 0;
+
+  while ((match = POSSESSIVE_NAME_PATTERN.exec(openingExcerpt)) !== null) {
+    const candidate = normalizeViewpointCharacterName(match[1] ?? "");
+
+    if (candidate && isLikelyCharacterName(candidate)) {
+      fromPossessives.push(candidate);
+    }
+  }
+
+  return mergeDistinctCharacterNames(
+    fromActionVerbs,
+    fromPrepositionContext,
+    fromPossessives,
+  );
+}
+
+function inferPrimaryChapterPovCharacter(chapterTitle: string, chapterBody: string) {
+  const groups: Array<{ displayName: string; score: number }> = [];
+
+  const addScoredName = (name: string, weight: number) => {
+    const normalized = normalizeViewpointCharacterName(name);
+
+    if (!normalized) {
+      return;
+    }
+
+    const index = groups.findIndex((group) =>
+      areCharacterIdentityEquivalent(group.displayName, normalized),
+    );
+
+    if (index >= 0) {
+      groups[index].score += weight;
+      groups[index].displayName = choosePreferredCharacterDisplayName(
+        groups[index].displayName,
+        normalized,
+      );
+      return;
+    }
+
+    groups.push({
+      displayName: normalized,
+      score: weight,
+    });
+  };
+
+  for (const name of extractLikelyCharacterNames(chapterBody)) {
+    addScoredName(name, 1);
+  }
+
+  for (const name of listOpeningCharacterNames(chapterBody)) {
+    addScoredName(name, 4);
+  }
+
+  for (const name of extractLikelyCharacterNames(chapterTitle)) {
+    addScoredName(name, 2);
+  }
+
+  if (groups.length === 0) {
+    return null;
+  }
+
+  groups.sort((left, right) => {
+    if (right.score !== left.score) {
+      return right.score - left.score;
+    }
+
+    return right.displayName.length - left.displayName.length;
+  });
+
+  return groups[0]?.displayName ?? null;
+}
+
+function buildChapterViewpointCharacterCandidates(options: {
+  chapterTitle: string;
+  chapterBody: string;
+  existingViewpointNames?: readonly string[];
+}) {
+  const primaryPovCharacter = inferPrimaryChapterPovCharacter(
+    options.chapterTitle,
+    options.chapterBody,
+  );
+
+  const merged = mergeCharacterNamesForViewpointSection(
+    listCharacterCandidatesFromChapter(options.chapterTitle, options.chapterBody),
+    options.existingViewpointNames ?? [],
+  );
+
+  const withoutPrimary = primaryPovCharacter
+    ? merged.filter(
+        (candidate) => !areCharacterIdentityEquivalent(candidate, primaryPovCharacter),
+      )
+    : merged;
+
+  return {
+    primaryPovCharacter,
+    candidates: withoutPrimary.slice(0, MAX_CHARACTER_CANDIDATES_PER_CHAPTER),
+  };
+}
+
+function toLeadNameRootKey(name: string) {
+  const normalized = normalizeViewpointCharacterName(name).replace(/\./g, "");
+
+  if (!normalized) {
+    return "";
+  }
+
+  const firstToken = normalized.split(/\s+/).filter(Boolean)[0];
+
+  if (!firstToken || firstToken.length < 3 || !/^[A-Za-z]+$/.test(firstToken)) {
+    return "";
+  }
+
+  const root = firstToken.toLowerCase();
+
+  if (
+    NON_CHARACTER_NAME_TOKENS.has(root) ||
+    NON_CHARACTER_PRONOUN_TOKENS.has(root) ||
+    NON_CHARACTER_GENERIC_LABEL_TOKENS.has(root) ||
+    CHARACTER_TITLE_PREFIX_TOKENS.has(root) ||
+    CHARACTER_HONORIFIC_PREFIX_TOKENS.has(root)
+  ) {
+    return "";
+  }
+
+  return root;
+}
+
+function findBlockedLeadNamesInChapterOpening(
+  chapterBody: string,
+  blockedLeadNames: string[],
+) {
+  if (!blockedLeadNames.length) {
+    return [];
+  }
+
+  const blockedByKey = new Map<string, string>();
+  const blockedByRootKey = new Map<string, string>();
+
+  for (const rawName of blockedLeadNames) {
+    const normalized = normalizeViewpointCharacterName(rawName);
+
+    if (!normalized) {
+      continue;
+    }
+
+    const key = toCharacterIdentityKey(normalized);
+
+    if (!key || blockedByKey.has(key)) {
+      continue;
+    }
+
+    blockedByKey.set(key, normalized);
+
+    const rootKey = toLeadNameRootKey(normalized);
+
+    if (rootKey && !blockedByRootKey.has(rootKey)) {
+      blockedByRootKey.set(rootKey, normalized);
+    }
+  }
+
+  if (blockedByKey.size === 0 && blockedByRootKey.size === 0) {
+    return [];
+  }
+
+  const matchedIdentityKeys = new Set<string>();
+  const matchedRootKeys = new Set<string>();
+  const matchedDisplayNames: string[] = [];
+
+  for (const openingName of listOpeningCharacterNames(chapterBody)) {
+    const key = toCharacterIdentityKey(openingName);
+
+    if (!key || !blockedByKey.has(key) || matchedIdentityKeys.has(key)) {
+      const rootKey = toLeadNameRootKey(openingName);
+
+      if (!rootKey || !blockedByRootKey.has(rootKey) || matchedRootKeys.has(rootKey)) {
+        continue;
+      }
+
+      matchedRootKeys.add(rootKey);
+      matchedDisplayNames.push(blockedByRootKey.get(rootKey) ?? openingName);
+      continue;
+    }
+
+    matchedIdentityKeys.add(key);
+    matchedDisplayNames.push(blockedByKey.get(key) ?? openingName);
+  }
+
+  return matchedDisplayNames;
+}
+
+function safeParseTextArray(input: string | null | undefined, maxItems = SESSION_CANON_MAX_LIST_ITEMS) {
+  if (!input) {
+    return [];
+  }
+
+  try {
+    const parsed = JSON.parse(input) as unknown;
+
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+
+    const normalized = parsed
+      .filter((item): item is string => typeof item === "string")
+      .map((item) => item.replace(/\s+/g, " ").trim())
+      .filter(Boolean);
+
+    const deduped: string[] = [];
+    const seen = new Set<string>();
+
+    for (const item of normalized) {
+      const key = item.toLowerCase();
+
+      if (seen.has(key)) {
+        continue;
+      }
+
+      seen.add(key);
+      deduped.push(item);
+
+      if (deduped.length >= maxItems) {
+        return deduped;
+      }
+    }
+
+    return deduped;
+  } catch {
+    return [];
+  }
+}
+
+function truncateSnapshotLine(input: string, maxLength = SNAPSHOT_SENTENCE_MAX_LENGTH) {
+  const normalized = input.replace(/\s+/g, " ").trim();
+
+  if (!normalized) {
+    return "";
+  }
+
+  if (normalized.length <= maxLength) {
+    return normalized;
+  }
+
+  return `${normalized.slice(0, maxLength - 3).trimEnd()}...`;
+}
+
+function splitIntoSentences(input: string) {
+  const normalized = normalizeChapterBody(input);
+
+  if (!normalized) {
+    return [] as string[];
+  }
+
+  const matches =
+    normalized.match(/[^.!?]+(?:[.!?]+(?=\s|$)|$)/g) ??
+    normalized
+      .split(/\n+/)
+      .map((line) => line.trim())
+      .filter(Boolean);
+
+  return matches.map((sentence) => truncateSnapshotLine(sentence)).filter(Boolean);
+}
+
+function mergeDistinctTextItems(...groups: Array<readonly string[]>) {
+  const merged: string[] = [];
+  const seen = new Set<string>();
+
+  for (const group of groups) {
+    for (const item of group) {
+      const normalized = item.replace(/\s+/g, " ").trim();
+
+      if (!normalized) {
+        continue;
+      }
+
+      const key = normalized.toLowerCase();
+
+      if (seen.has(key)) {
+        continue;
+      }
+
+      seen.add(key);
+      merged.push(normalized);
+
+      if (merged.length >= SESSION_CANON_MAX_LIST_ITEMS) {
+        return merged;
+      }
+    }
+  }
+
+  return merged;
+}
+
+function mergeDistinctIdentityNames(...groups: Array<readonly string[]>) {
+  const merged: string[] = [];
+  const seen = new Set<string>();
+
+  for (const group of groups) {
+    for (const rawName of group) {
+      const normalized = normalizeViewpointCharacterName(rawName);
+
+      if (!normalized) {
+        continue;
+      }
+
+      const key = toCharacterIdentityKey(normalized);
+
+      if (!key || seen.has(key)) {
+        continue;
+      }
+
+      seen.add(key);
+      merged.push(normalized);
+
+      if (merged.length >= SESSION_CANON_MAX_LIST_ITEMS) {
+        return merged;
+      }
+    }
+  }
+
+  return merged;
+}
+
+function isLikelyPlaceName(name: string) {
+  const normalized = normalizeViewpointCharacterName(name);
+
+  if (!normalized) {
+    return false;
+  }
+
+  const parts = normalized.split(/\s+/).filter(Boolean);
+
+  if (parts.length === 0 || parts.length > 3) {
+    return false;
+  }
+
+  for (const part of parts) {
+    if (!/^[A-Z][a-z]{2,}$/.test(part)) {
+      return false;
+    }
+
+    if (NON_PLACE_NAME_TOKENS.has(part.toLowerCase())) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+function extractLikelyPlaceNames(input: string) {
+  const normalized = normalizeChapterBody(input);
+
+  if (!normalized) {
+    return [];
+  }
+
+  const places: string[] = [];
+  let match: RegExpExecArray | null = null;
+
+  LIKELY_PLACE_NAME_PATTERN.lastIndex = 0;
+
+  while ((match = LIKELY_PLACE_NAME_PATTERN.exec(normalized)) !== null) {
+    const candidate = normalizeViewpointCharacterName(match[1] ?? "");
+
+    if (candidate && isLikelyPlaceName(candidate)) {
+      places.push(candidate);
+    }
+  }
+
+  return mergeDistinctTextItems(places);
+}
+
+function getOpeningExcerpt(input: string) {
+  const normalized = normalizeChapterBody(input);
+
+  if (!normalized) {
+    return "";
+  }
+
+  return normalized
+    .split(/\s+/)
+    .slice(0, CHAPTER_OPENING_CONTEXT_WORD_LIMIT)
+    .join(" ");
+}
+
+function inferEventKind(summary: string): SessionEventState["eventKind"] {
+  if (/\?$/.test(summary)) {
+    return "CLIFFHANGER";
+  }
+
+  if (/\b(revealed|realized|learned|discovered|uncovered)\b/i.test(summary)) {
+    return "REVEAL";
+  }
+
+  if (/\b(promised|vowed|swore|pledged|agreed|decided)\b/i.test(summary)) {
+    return "COMMITMENT";
+  }
+
+  if (/\b(changed|transformed|became|injured|wounded|recovered)\b/i.test(summary)) {
+    return "STATE_CHANGE";
+  }
+
+  return "EVENT";
+}
+
+function inferEventSubjectKey(
+  summary: string,
+  characterNames: string[],
+  placeNames: string[],
+) {
+  const summaryText = normalizeChapterBody(summary);
+
+  for (const name of characterNames) {
+    const key = toCharacterIdentityKey(name);
+
+    if (!key) {
+      continue;
+    }
+
+    const token = new RegExp(`\\b${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i");
+
+    if (token.test(summaryText)) {
+      return key;
+    }
+  }
+
+  for (const place of placeNames) {
+    const normalizedPlace = place.replace(/\s+/g, " ").trim();
+
+    if (!normalizedPlace) {
+      continue;
+    }
+
+    const token = new RegExp(
+      `\\b${normalizedPlace.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`,
+      "i",
+    );
+
+    if (token.test(summaryText)) {
+      return normalizedPlace.toLowerCase();
+    }
+  }
+
+  return null;
+}
+
+function hasExplicitTransitionCue(input: string) {
+  return TRANSITION_CUE_PATTERN.test(input);
+}
+
+function buildChapterStateSignals(options: {
+  chapterTitle: string;
+  chapterBody: string;
+  choiceOptions: string[];
+}) {
+  const sentences = splitIntoSentences(options.chapterBody);
+  const openingSentences = sentences.slice(0, 2);
+  const endingSentences = sentences.slice(-2);
+  const openingState = openingSentences.length ? openingSentences.join(" ") : null;
+  const endingState = endingSentences.length ? endingSentences.join(" ") : null;
+  const chapterSummarySeed = [sentences[0], sentences[sentences.length - 1]]
+    .filter(Boolean)
+    .join(" ");
+  const chapterSummary = chapterSummarySeed
+    ? truncateSnapshotLine(chapterSummarySeed, SNAPSHOT_SENTENCE_MAX_LENGTH + 90)
+    : "Chapter progresses forward with meaningful consequence.";
+
+  const leadCharacterNames = listOpeningCharacterNames(options.chapterBody).slice(0, 5);
+  const activeCharacterNames = mergeDistinctCharacterNames(
+    listCharacterCandidatesFromChapter(options.chapterTitle, options.chapterBody),
+  ).slice(0, SESSION_CANON_MAX_LIST_ITEMS);
+  const activePlaceNames = extractLikelyPlaceNames(options.chapterBody).slice(
+    0,
+    SESSION_CANON_MAX_LIST_ITEMS,
+  );
+  const majorEvents = mergeDistinctTextItems(
+    sentences.slice(0, 3),
+    sentences.slice(Math.max(0, Math.floor(sentences.length / 2) - 1), Math.max(0, Math.floor(sentences.length / 2) + 1)),
+    endingSentences,
+  ).slice(0, SNAPSHOT_EVENT_MAX_ITEMS);
+  const unresolvedThreads = mergeDistinctTextItems(
+    options.choiceOptions.map((choice) => truncateSnapshotLine(choice)),
+    endingSentences.filter((sentence) => /\?$/.test(sentence)),
+  ).slice(0, SNAPSHOT_EVENT_MAX_ITEMS);
+
+  return {
+    chapterSummary,
+    leadCharacterNames,
+    activeCharacterNames,
+    activePlaceNames,
+    openingState,
+    endingState,
+    unresolvedThreads,
+    majorEvents,
+  } satisfies ChapterStateSignals;
+}
+
+function canonicalFactLinesFromSignals(signals: ChapterStateSignals) {
+  const facts: string[] = [];
+
+  if (signals.leadCharacterNames.length) {
+    facts.push(`Lead characters introduced: ${signals.leadCharacterNames.join(", ")}.`);
+  }
+
+  if (signals.activePlaceNames.length) {
+    facts.push(`Primary settings introduced: ${signals.activePlaceNames.join(", ")}.`);
+  }
+
+  for (const eventSummary of signals.majorEvents.slice(0, 4)) {
+    facts.push(eventSummary);
+  }
+
+  return mergeDistinctTextItems(facts).slice(0, SNAPSHOT_EVENT_MAX_ITEMS);
+}
+
 function findOverusedCharacterNamesFromHistory(chapters: string[]) {
   const chapterPresenceCounts = new Map<string, number>();
   const displayNameByKey = new Map<string, string>();
@@ -832,6 +1656,646 @@ async function listOverusedCharacterNamesForReader(options: {
   return findOverusedCharacterNamesFromHistory(
     result.rows.map((row) => row.ai_response).filter(Boolean),
   );
+}
+
+async function listCrossBookBlockedLeadNamesForReader(options: {
+  readerId: string;
+  currentWorldId: string;
+}) {
+  const db = await getDatabase();
+  const result = await db.query<PriorOpeningChapterTextRow>(
+    `
+      SELECT turns.ai_response
+      FROM story_turns AS turns
+      JOIN story_sessions AS sessions
+        ON sessions.id = turns.session_id
+      WHERE sessions.reader_id = $1
+        AND sessions.world_id <> $2
+        AND turns.turn_index = 1
+      ORDER BY turns.created_at DESC
+      LIMIT $3
+    `,
+    [
+      options.readerId,
+      options.currentWorldId,
+      CROSS_BOOK_OPENING_SCAN_CHAPTER_LIMIT,
+    ],
+  );
+
+  const blockedLeadNames: string[] = [];
+  const seen = new Set<string>();
+
+  for (const row of result.rows) {
+    for (const name of listOpeningCharacterNames(row.ai_response)) {
+      const key = toCharacterIdentityKey(name);
+
+      if (!key || seen.has(key)) {
+        continue;
+      }
+
+      seen.add(key);
+      blockedLeadNames.push(name);
+
+      if (blockedLeadNames.length >= CROSS_BOOK_BLOCKED_LEAD_NAME_MAX_RESULTS) {
+        return blockedLeadNames;
+      }
+    }
+  }
+
+  return blockedLeadNames;
+}
+
+function toCanonBaselineState(row: SessionCanonBaselineRow): CanonBaselineState {
+  return {
+    sourceChapterId: row.source_chapter_id,
+    sourceChapterNumber: toNumber(row.source_chapter_number),
+    chapterOneSummary: normalizeOptionalText(row.chapter_one_summary),
+    leadCharacterNames: mergeDistinctIdentityNames(
+      safeParseTextArray(row.lead_character_names),
+    ),
+    notablePlaceNames: mergeDistinctTextItems(
+      safeParseTextArray(row.notable_place_names),
+    ),
+    canonicalFacts: mergeDistinctTextItems(safeParseTextArray(row.canonical_facts)),
+  };
+}
+
+function toSessionSnapshotState(row: SessionChapterSnapshotRow): SessionSnapshotState {
+  return {
+    chapterNumber: toNumber(row.chapter_number),
+    chapterTitle: row.chapter_title,
+    openingState: normalizeOptionalText(row.opening_state),
+    endingState: normalizeOptionalText(row.ending_state),
+    activeCharacterNames: mergeDistinctIdentityNames(
+      safeParseTextArray(row.active_character_names),
+    ),
+    activePlaceNames: mergeDistinctTextItems(
+      safeParseTextArray(row.active_place_names),
+    ),
+    unresolvedThreads: mergeDistinctTextItems(
+      safeParseTextArray(row.unresolved_threads),
+    ),
+    majorEvents: mergeDistinctTextItems(safeParseTextArray(row.major_events)),
+    createdAt: new Date(row.created_at).toISOString(),
+  };
+}
+
+function toSessionEventState(row: SessionEventLedgerRow): SessionEventState {
+  const normalizedKind = row.event_kind.trim().toUpperCase();
+  const eventKind =
+    normalizedKind === "REVEAL" ||
+    normalizedKind === "COMMITMENT" ||
+    normalizedKind === "STATE_CHANGE" ||
+    normalizedKind === "CLIFFHANGER"
+      ? normalizedKind
+      : "EVENT";
+  const parsedImportance = toNumber(row.importance ?? 1);
+  const boundedImportance = Math.min(5, Math.max(1, parsedImportance || 1));
+
+  return {
+    chapterNumber: toNumber(row.chapter_number),
+    eventKind,
+    summary: truncateSnapshotLine(row.summary),
+    subjectKey: normalizeOptionalText(row.subject_key),
+    importance: boundedImportance,
+    createdAt: new Date(row.created_at).toISOString(),
+  };
+}
+
+async function getSessionCanonContext(sessionId: string): Promise<SessionCanonContext> {
+  const db = await getDatabase();
+  const [baselineResult, snapshotsResult, eventsResult] = await Promise.all([
+    db.query<SessionCanonBaselineRow>(
+      `
+        SELECT
+          source_chapter_id,
+          source_chapter_number,
+          chapter_one_summary,
+          lead_character_names,
+          notable_place_names,
+          canonical_facts,
+          created_at,
+          updated_at
+        FROM session_canon_baselines
+        WHERE session_id = $1
+        LIMIT 1
+      `,
+      [sessionId],
+    ),
+    db.query<SessionChapterSnapshotRow>(
+      `
+        SELECT
+          chapter_number,
+          chapter_title,
+          opening_state,
+          ending_state,
+          active_character_names,
+          active_place_names,
+          unresolved_threads,
+          major_events,
+          created_at
+        FROM session_chapter_snapshots
+        WHERE session_id = $1
+        ORDER BY chapter_number DESC
+        LIMIT $2
+      `,
+      [sessionId, SESSION_CANON_CONTEXT_SNAPSHOT_LIMIT],
+    ),
+    db.query<SessionEventLedgerRow>(
+      `
+        SELECT
+          chapter_number,
+          event_kind,
+          summary,
+          subject_key,
+          importance,
+          created_at
+        FROM session_event_ledger
+        WHERE session_id = $1
+        ORDER BY chapter_number DESC, importance DESC, created_at DESC
+        LIMIT $2
+      `,
+      [sessionId, SESSION_CANON_CONTEXT_EVENT_LIMIT],
+    ),
+  ]);
+
+  const baseline = baselineResult.rows[0]
+    ? toCanonBaselineState(baselineResult.rows[0])
+    : null;
+  const recentSnapshots = snapshotsResult.rows.map(toSessionSnapshotState);
+  const latestSnapshot = recentSnapshots[0] ?? null;
+  const recentEvents = eventsResult.rows.map(toSessionEventState);
+  const unresolvedThreads = mergeDistinctTextItems(
+    recentSnapshots.flatMap((snapshot) => snapshot.unresolvedThreads),
+  ).slice(0, SNAPSHOT_EVENT_MAX_ITEMS);
+  const knownCharacterNames = mergeDistinctIdentityNames(
+    baseline?.leadCharacterNames ?? [],
+    ...recentSnapshots.map((snapshot) => snapshot.activeCharacterNames),
+  );
+  const knownPlaceNames = mergeDistinctTextItems(
+    baseline?.notablePlaceNames ?? [],
+    ...recentSnapshots.map((snapshot) => snapshot.activePlaceNames),
+  );
+
+  return {
+    baseline,
+    latestSnapshot,
+    recentSnapshots,
+    recentEvents,
+    unresolvedThreads,
+    knownCharacterNames,
+    knownPlaceNames,
+  };
+}
+
+function formatSessionCanonContextLines(canonContext: SessionCanonContext | null) {
+  if (!canonContext) {
+    return [];
+  }
+
+  const sections: string[] = [];
+
+  if (canonContext.baseline) {
+    const baseline = canonContext.baseline;
+    sections.push("Locked session canon baseline (from chapter 1):");
+
+    if (baseline.chapterOneSummary) {
+      sections.push(`- Chapter 1 summary: ${baseline.chapterOneSummary}`);
+    }
+
+    if (baseline.leadCharacterNames.length) {
+      sections.push(`- Lead characters: ${baseline.leadCharacterNames.join(", ")}`);
+    }
+
+    if (baseline.notablePlaceNames.length) {
+      sections.push(`- Core places: ${baseline.notablePlaceNames.join(", ")}`);
+    }
+
+    if (baseline.canonicalFacts.length) {
+      sections.push(
+        ...baseline.canonicalFacts.map((fact) => `- Canon fact: ${truncateSnapshotLine(fact)}`),
+      );
+    }
+  }
+
+  if (canonContext.latestSnapshot) {
+    const latest = canonContext.latestSnapshot;
+    sections.push("Latest chapter state snapshot:");
+    sections.push(`- Previous chapter: ${latest.chapterNumber} (${latest.chapterTitle})`);
+
+    if (latest.openingState) {
+      sections.push(`- Opening state then: ${latest.openingState}`);
+    }
+
+    if (latest.endingState) {
+      sections.push(`- Ending state now: ${latest.endingState}`);
+    }
+
+    if (latest.activeCharacterNames.length) {
+      sections.push(`- Active characters: ${latest.activeCharacterNames.join(", ")}`);
+    }
+
+    if (latest.activePlaceNames.length) {
+      sections.push(`- Active places: ${latest.activePlaceNames.join(", ")}`);
+    }
+  }
+
+  if (canonContext.unresolvedThreads.length) {
+    sections.push("Unresolved narrative threads:");
+    sections.push(
+      ...canonContext.unresolvedThreads
+        .slice(0, SNAPSHOT_EVENT_MAX_ITEMS)
+        .map((thread) => `- ${thread}`),
+    );
+  }
+
+  if (canonContext.recentEvents.length) {
+    sections.push("Recent event ledger:");
+    sections.push(
+      ...canonContext.recentEvents
+        .slice(0, SNAPSHOT_EVENT_MAX_ITEMS)
+        .map(
+          (event) =>
+            `- [${event.eventKind}] Ch ${event.chapterNumber}: ${truncateSnapshotLine(event.summary)}`,
+        ),
+    );
+  }
+
+  return sections;
+}
+
+function isWithinOneEdit(left: string, right: string) {
+  if (left === right) {
+    return true;
+  }
+
+  const leftLength = left.length;
+  const rightLength = right.length;
+
+  if (Math.abs(leftLength - rightLength) > 1) {
+    return false;
+  }
+
+  let i = 0;
+  let j = 0;
+  let edits = 0;
+
+  while (i < leftLength && j < rightLength) {
+    if (left[i] === right[j]) {
+      i += 1;
+      j += 1;
+      continue;
+    }
+
+    edits += 1;
+
+    if (edits > 1) {
+      return false;
+    }
+
+    if (leftLength > rightLength) {
+      i += 1;
+    } else if (rightLength > leftLength) {
+      j += 1;
+    } else {
+      i += 1;
+      j += 1;
+    }
+  }
+
+  if (i < leftLength || j < rightLength) {
+    edits += 1;
+  }
+
+  return edits <= 1;
+}
+
+function findNearIdentityCollisions(knownNames: string[], observedNames: string[]) {
+  const knownByKey = new Map<string, string>();
+
+  for (const knownName of knownNames) {
+    const key = toCharacterIdentityKey(knownName);
+
+    if (!key || knownByKey.has(key)) {
+      continue;
+    }
+
+    knownByKey.set(key, knownName);
+  }
+
+  const collisions: Array<{ known: string; observed: string }> = [];
+  const seenPairs = new Set<string>();
+
+  for (const observedName of observedNames) {
+    const observedKey = toCharacterIdentityKey(observedName);
+
+    if (!observedKey || knownByKey.has(observedKey) || observedKey.length < 4) {
+      continue;
+    }
+
+    for (const [knownKey, knownDisplay] of knownByKey.entries()) {
+      if (knownKey.length < 4 || knownKey[0] !== observedKey[0]) {
+        continue;
+      }
+
+      if (!isWithinOneEdit(knownKey, observedKey)) {
+        continue;
+      }
+
+      const pairKey = `${knownKey}::${observedKey}`;
+
+      if (seenPairs.has(pairKey)) {
+        continue;
+      }
+
+      seenPairs.add(pairKey);
+      collisions.push({
+        known: knownDisplay,
+        observed: observedName,
+      });
+    }
+  }
+
+  return collisions;
+}
+
+function findNearPlaceCollisions(knownPlaces: string[], observedPlaces: string[]) {
+  const knownByKey = new Map<string, string>();
+
+  for (const knownPlace of knownPlaces) {
+    const normalized = knownPlace.replace(/\s+/g, " ").trim();
+
+    if (!normalized) {
+      continue;
+    }
+
+    const key = normalized.toLowerCase();
+
+    if (knownByKey.has(key)) {
+      continue;
+    }
+
+    knownByKey.set(key, normalized);
+  }
+
+  const collisions: Array<{ known: string; observed: string }> = [];
+  const seenPairs = new Set<string>();
+
+  for (const observedPlace of observedPlaces) {
+    const normalizedObserved = observedPlace.replace(/\s+/g, " ").trim();
+
+    if (!normalizedObserved) {
+      continue;
+    }
+
+    const observedKey = normalizedObserved.toLowerCase();
+
+    if (knownByKey.has(observedKey) || observedKey.length < 5) {
+      continue;
+    }
+
+    for (const [knownKey, knownDisplay] of knownByKey.entries()) {
+      if (knownKey.length < 5 || knownKey[0] !== observedKey[0]) {
+        continue;
+      }
+
+      if (!isWithinOneEdit(knownKey, observedKey)) {
+        continue;
+      }
+
+      const pairKey = `${knownKey}::${observedKey}`;
+
+      if (seenPairs.has(pairKey)) {
+        continue;
+      }
+
+      seenPairs.add(pairKey);
+      collisions.push({
+        known: knownDisplay,
+        observed: normalizedObserved,
+      });
+    }
+  }
+
+  return collisions;
+}
+
+function validateChapterAgainstSessionCanon(options: {
+  chapterNumber: number;
+  chapterBody: string;
+  chapterTitle: string;
+  canonContext: SessionCanonContext | null;
+}) {
+  if (!options.canonContext || options.chapterNumber <= 1) {
+    return [] as string[];
+  }
+
+  const violations: string[] = [];
+  const openingExcerpt = getOpeningExcerpt(options.chapterBody);
+  const openingPlaces = extractLikelyPlaceNames(openingExcerpt);
+  const observedNames = listCharacterCandidatesFromChapter(
+    options.chapterTitle,
+    options.chapterBody,
+  );
+  const observedPlaces = extractLikelyPlaceNames(options.chapterBody);
+  const nameCollisions = findNearIdentityCollisions(
+    options.canonContext.knownCharacterNames,
+    observedNames,
+  );
+  const placeCollisions = findNearPlaceCollisions(
+    options.canonContext.knownPlaceNames,
+    observedPlaces,
+  );
+
+  if (nameCollisions.length) {
+    const preview = nameCollisions
+      .slice(0, 2)
+      .map((pair) => `${pair.observed} (close to ${pair.known})`)
+      .join(", ");
+    violations.push(`Possible accidental character rename detected: ${preview}.`);
+  }
+
+  if (placeCollisions.length) {
+    const preview = placeCollisions
+      .slice(0, 2)
+      .map((pair) => `${pair.observed} (close to ${pair.known})`)
+      .join(", ");
+    violations.push(`Possible accidental place rename detected: ${preview}.`);
+  }
+
+  if (
+    options.canonContext.latestSnapshot &&
+    options.canonContext.latestSnapshot.activePlaceNames.length &&
+    openingPlaces.length &&
+    !hasExplicitTransitionCue(openingExcerpt)
+  ) {
+    const previousPlaces = new Set(
+      options.canonContext.latestSnapshot.activePlaceNames.map((place) =>
+        place.toLowerCase(),
+      ),
+    );
+    const overlap = openingPlaces.some((place) => previousPlaces.has(place.toLowerCase()));
+
+    if (!overlap) {
+      violations.push(
+        "Opening location appears disconnected from prior chapter state without an explicit transition cue.",
+      );
+    }
+  }
+
+  return violations;
+}
+
+async function persistSessionCanonStateForChapter(options: {
+  db: Awaited<ReturnType<typeof getDatabase>>;
+  sessionId: string;
+  worldId: string;
+  readerId: string;
+  chapterId: string;
+  chapterNumber: number;
+  chapterTitle: string;
+  chapterBody: string;
+  choiceOptions: string[];
+  createdAtIso: string;
+}) {
+  const signals = buildChapterStateSignals({
+    chapterTitle: options.chapterTitle,
+    chapterBody: options.chapterBody,
+    choiceOptions: options.choiceOptions,
+  });
+
+  if (options.chapterNumber === 1) {
+    await options.db.query(
+      `
+        INSERT INTO session_canon_baselines (
+          session_id,
+          world_id,
+          reader_id,
+          source_chapter_id,
+          source_chapter_number,
+          chapter_one_summary,
+          lead_character_names,
+          notable_place_names,
+          canonical_facts,
+          created_at,
+          updated_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+        ON CONFLICT (session_id) DO NOTHING
+      `,
+      [
+        options.sessionId,
+        options.worldId,
+        options.readerId,
+        options.chapterId,
+        options.chapterNumber,
+        signals.chapterSummary,
+        JSON.stringify(signals.leadCharacterNames),
+        JSON.stringify(signals.activePlaceNames),
+        JSON.stringify(canonicalFactLinesFromSignals(signals)),
+        options.createdAtIso,
+        options.createdAtIso,
+      ],
+    );
+  }
+
+  await options.db.query(
+    `
+      INSERT INTO session_chapter_snapshots (
+        id,
+        session_id,
+        chapter_id,
+        chapter_number,
+        chapter_title,
+        opening_state,
+        ending_state,
+        active_character_names,
+        active_place_names,
+        unresolved_threads,
+        major_events,
+        created_at,
+        updated_at
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+      ON CONFLICT (session_id, chapter_number)
+      DO UPDATE
+      SET
+        chapter_id = EXCLUDED.chapter_id,
+        chapter_title = EXCLUDED.chapter_title,
+        opening_state = EXCLUDED.opening_state,
+        ending_state = EXCLUDED.ending_state,
+        active_character_names = EXCLUDED.active_character_names,
+        active_place_names = EXCLUDED.active_place_names,
+        unresolved_threads = EXCLUDED.unresolved_threads,
+        major_events = EXCLUDED.major_events,
+        updated_at = EXCLUDED.updated_at
+    `,
+    [
+      randomUUID(),
+      options.sessionId,
+      options.chapterId,
+      options.chapterNumber,
+      options.chapterTitle,
+      signals.openingState,
+      signals.endingState,
+      JSON.stringify(signals.activeCharacterNames),
+      JSON.stringify(signals.activePlaceNames),
+      JSON.stringify(signals.unresolvedThreads),
+      JSON.stringify(signals.majorEvents),
+      options.createdAtIso,
+      options.createdAtIso,
+    ],
+  );
+
+  await options.db.query(
+    `
+      DELETE FROM session_event_ledger
+      WHERE session_id = $1
+        AND chapter_number = $2
+    `,
+    [options.sessionId, options.chapterNumber],
+  );
+
+  const eventRows = signals.majorEvents.slice(0, SNAPSHOT_EVENT_MAX_ITEMS);
+
+  for (let index = 0; index < eventRows.length; index += 1) {
+    const summary = eventRows[index];
+    const eventKind = inferEventKind(summary);
+    const subjectKey = inferEventSubjectKey(
+      summary,
+      signals.activeCharacterNames,
+      signals.activePlaceNames,
+    );
+    const importance = Math.max(1, Math.min(5, 5 - index));
+
+    await options.db.query(
+      `
+        INSERT INTO session_event_ledger (
+          id,
+          session_id,
+          chapter_id,
+          chapter_number,
+          event_kind,
+          summary,
+          subject_key,
+          importance,
+          created_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+      `,
+      [
+        randomUUID(),
+        options.sessionId,
+        options.chapterId,
+        options.chapterNumber,
+        eventKind,
+        summary,
+        subjectKey,
+        importance,
+        options.createdAtIso,
+      ],
+    );
+  }
 }
 
 function hasLikelyAbruptEnding(input: string) {
@@ -938,9 +2402,21 @@ function isGenericChoice(choice: string) {
     "learn more",
     "see what happens",
     "continue naturally",
+    "make a choice",
+    "make the decision",
+    "the central conflict",
+    "central stakes",
+    "strategic choice",
+    "secure leverage",
+    "reshape your position",
+    "opposition can regroup",
   ];
 
-  return genericPhrases.some((phrase) => normalized.includes(phrase));
+  if (genericPhrases.some((phrase) => normalized.includes(phrase))) {
+    return true;
+  }
+
+  return CHOICE_VAGUE_STYLE_PATTERNS.some((pattern) => pattern.test(normalized));
 }
 
 function containsChoiceMetaArtifact(input: string) {
@@ -983,7 +2459,110 @@ function toChoiceFocusCandidate(input: string, maxChars: number) {
   return summary;
 }
 
-function isLowQualityChoice(choice: string) {
+function tokenizeChoiceAnchorWords(input: string) {
+  const normalized = normalizeChoice(input)
+    .toLowerCase()
+    .replace(/[^a-z0-9\s'-]/g, " ");
+
+  if (!normalized) {
+    return [] as string[];
+  }
+
+  return normalized
+    .split(/\s+/)
+    .map((token) => token.replace(/^[-']+|[-']+$/g, ""))
+    .filter((token) => token.length >= 4 && !CHOICE_ANCHOR_STOPWORDS.has(token));
+}
+
+function addChoiceAnchorTokens(target: Set<string>, input: string) {
+  for (const token of tokenizeChoiceAnchorWords(input)) {
+    target.add(token);
+  }
+}
+
+function getChoiceAnchorKeywords(context?: ChoiceContext) {
+  const chapterTitle = context?.chapterTitle?.trim() || "";
+  const chapterBody = normalizeChapterBody(context?.chapterBody ?? "");
+  const direction = context?.directionInput?.trim() || "";
+  const anchors = new Set<string>();
+
+  if (chapterTitle && !/^chapter\s+\d+/i.test(chapterTitle)) {
+    addChoiceAnchorTokens(anchors, chapterTitle);
+  }
+
+  if (chapterBody) {
+    const characters = listCharacterCandidatesFromChapter(
+      chapterTitle || "Chapter",
+      chapterBody,
+    ).slice(0, 3);
+    const places = extractLikelyPlaceNames(chapterBody).slice(0, 2);
+    const endingSentences = splitIntoSentences(chapterBody).slice(-3);
+
+    for (const name of characters) {
+      addChoiceAnchorTokens(anchors, name);
+    }
+
+    for (const place of places) {
+      addChoiceAnchorTokens(anchors, place);
+    }
+
+    for (const sentence of endingSentences) {
+      addChoiceAnchorTokens(anchors, clipChoiceFocus(sentence, 10));
+    }
+  }
+
+  if (direction && !/^continue\b/i.test(direction)) {
+    addChoiceAnchorTokens(anchors, direction);
+  }
+
+  return anchors;
+}
+
+function choiceContainsContextAnchor(choice: string, anchorKeywords: ReadonlySet<string>) {
+  if (anchorKeywords.size === 0) {
+    return true;
+  }
+
+  const choiceTokens = tokenizeChoiceAnchorWords(choice);
+
+  if (choiceTokens.length === 0) {
+    return false;
+  }
+
+  return choiceTokens.some((token) => anchorKeywords.has(token));
+}
+
+function hasConcreteChoiceSignal(choice: string) {
+  const normalized = normalizeChoice(choice);
+
+  if (!normalized) {
+    return false;
+  }
+
+  if (/\b[A-Z][a-z]{2,}(?:\s+[A-Z][a-z]{2,})?\b/.test(normalized)) {
+    return true;
+  }
+
+  if (/\b(at|inside|outside|beneath|across|toward|towards|into|through)\b/i.test(normalized)) {
+    return true;
+  }
+
+  if (
+    /\b(door|gate|letter|watch|journal|map|key|knife|blood|tower|archive|alley|room|street|river|forest|hall|market|dock|bridge|ledger|clock|church|station)\b/i.test(
+      normalized,
+    )
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
+function isLowQualityChoice(
+  choice: string,
+  context?: ChoiceContext,
+  anchorKeywords?: ReadonlySet<string>,
+) {
   const normalized = normalizeChoice(choice);
 
   if (!normalized) {
@@ -1013,6 +2592,13 @@ function isLowQualityChoice(choice: string) {
     return true;
   }
 
+  const anchors = anchorKeywords ?? getChoiceAnchorKeywords(context);
+  const anchoredToContext = choiceContainsContextAnchor(normalized, anchors);
+
+  if (!anchoredToContext && !hasConcreteChoiceSignal(normalized)) {
+    return true;
+  }
+
   return false;
 }
 
@@ -1030,11 +2616,11 @@ function getChoiceFocus(context?: ChoiceContext) {
   }
 
   if (chapterBody) {
-    const candidateSentences = normalizeChapterBody(chapterBody)
-      .split(/(?<=[.!?])\s+/)
-      .map((sentence) => sentence.trim())
-      .filter(Boolean)
-      .slice(0, 3);
+    const sentences = splitIntoSentences(chapterBody);
+    const candidateSentences = [
+      ...sentences.slice(-4),
+      ...sentences.slice(0, 2),
+    ].filter(Boolean);
 
     for (const sentence of candidateSentences) {
       const sentenceFocus = toChoiceFocusCandidate(sentence, 90);
@@ -1057,13 +2643,22 @@ function getChoiceFocus(context?: ChoiceContext) {
 }
 
 function buildFallbackChoices(chapterNumber: number, context?: ChoiceContext) {
-  const focus = clipChoiceFocus(getChoiceFocus(context), 7) || "the central threat";
+  const chapterTitle = context?.chapterTitle?.trim() || "Chapter";
+  const chapterBody = normalizeChapterBody(context?.chapterBody ?? "");
+  const focus = clipChoiceFocus(getChoiceFocus(context), 9) || "the immediate danger";
   const nextChapterNumber = chapterNumber + 1;
+  const characters = chapterBody
+    ? listCharacterCandidatesFromChapter(chapterTitle, chapterBody)
+    : [];
+  const places = chapterBody ? extractLikelyPlaceNames(chapterBody) : [];
+  const leadCharacter = characters[0] ?? "your closest ally";
+  const secondaryCharacter = characters[1] ?? "the only person who can verify the truth";
+  const placeClause = places[0] ? ` at ${places[0]}` : "";
 
   return [
-    `Escalate directly around ${focus} before the opposition can regroup and fortify. The move may secure a crucial advantage, but it will place one trusted ally in immediate danger.`,
-    `Investigate the hidden truth behind ${focus} through a covert and risky approach. If the lead is real you gain leverage, but if it is bait you walk into a deliberate trap.`,
-    `Force a public decision tied to ${focus} instead of waiting for perfect certainty. The fallout could fracture existing alliances and define the central stakes of chapter ${nextChapterNumber}.`,
+    `You pull ${leadCharacter} aside${placeClause} and demand the full truth about ${focus} before anyone else can interrupt. If they finally talk, you gain a precise target for chapter ${nextChapterNumber}, but both of you become exposed immediately.`,
+    `You leave the obvious path and investigate ${focus}${placeClause} while the scene is still volatile. The trail could reveal who is truly in control, or it could lead you straight into the trap they prepared.`,
+    `You make a personal call instead of a safe one: protect ${secondaryCharacter} first, or chase the chance to break ${focus} tonight. Either choice pushes chapter ${nextChapterNumber} into consequences you cannot undo.`,
   ].map((choice) => formatChoicePrompt(choice));
 }
 
@@ -1074,12 +2669,17 @@ function finalizeChoiceOptions(
 ) {
   const selected: string[] = [];
   const seen = new Set<string>();
+  const anchorKeywords = getChoiceAnchorKeywords(context);
 
   for (const rawChoice of choices) {
     const formatted = formatChoicePrompt(rawChoice);
     const key = formatted.toLowerCase();
 
-    if (!formatted || seen.has(key) || isLowQualityChoice(formatted)) {
+    if (
+      !formatted ||
+      seen.has(key) ||
+      isLowQualityChoice(formatted, context, anchorKeywords)
+    ) {
       continue;
     }
 
@@ -1097,7 +2697,11 @@ function finalizeChoiceOptions(
     const formatted = formatChoicePrompt(rawChoice);
     const key = formatted.toLowerCase();
 
-    if (!formatted || seen.has(key) || isLowQualityChoice(formatted)) {
+    if (
+      !formatted ||
+      seen.has(key) ||
+      isLowQualityChoice(formatted, context, anchorKeywords)
+    ) {
       continue;
     }
 
@@ -1110,9 +2714,9 @@ function finalizeChoiceOptions(
   }
 
   const emergencyFallbackChoices = [
-    "Force a direct confrontation that answers one mystery and exposes a deeper threat. The outcome will settle one conflict now, but it will ignite a harder problem immediately after.",
-    "Pursue the most dangerous lead before a rival can seize it and rewrite events. You might uncover decisive evidence, or you might trigger a trap that isolates your side.",
-    `Make a costly strategic choice now rather than deferring the decision to chance. That commitment will reshape your position and set the stakes for chapter ${chapterNumber + 1}.`,
+    `You confront the person hiding the most dangerous secret from this chapter and force an answer now. You might break the deadlock instantly, but the confrontation could turn violent before backup arrives.`,
+    "You chase the strongest lead before your rivals can erase it and rewrite the story around you. The evidence could finally lock the truth in place, or the pursuit could isolate you from everyone who can help.",
+    `You commit to one irreversible move tonight instead of waiting for certainty. That call sets the opening conflict of chapter ${chapterNumber + 1}, and there is no clean way to take it back.`,
   ];
 
   for (const rawChoice of emergencyFallbackChoices) {
@@ -1123,7 +2727,11 @@ function finalizeChoiceOptions(
     const formatted = formatChoicePrompt(rawChoice);
     const key = formatted.toLowerCase();
 
-    if (!formatted || seen.has(key) || isLowQualityChoice(formatted)) {
+    if (
+      !formatted ||
+      seen.has(key) ||
+      isLowQualityChoice(formatted, context, anchorKeywords)
+    ) {
       continue;
     }
 
@@ -1274,8 +2882,11 @@ function buildChapterPrompt(
   directionInput: string,
   profile: ChapterGenerationProfile,
   overusedCharacterNames: string[],
+  crossBookBlockedLeadNames: string[],
+  canonContext: SessionCanonContext | null,
 ) {
   const recentChapters = detail.chapters.slice(-profile.historyChapters);
+  const canonContextLines = formatSessionCanonContextLines(canonContext);
 
   const sections = [
     "You are the InkBranch chapter writer.",
@@ -1336,15 +2947,27 @@ function buildChapterPrompt(
         ])
       : ["No prior chapters yet."]),
     "",
+    ...canonContextLines,
+    canonContextLines.length ? "" : null,
     overusedCharacterNames.length ? "Cross-book originality guard:" : null,
     overusedCharacterNames.length
       ? `- Avoid using these overused names as the chapter's central POV/protagonist unless canon explicitly requires it: ${overusedCharacterNames.join(", ")}`
+      : null,
+    chapterNumber === 1 && crossBookBlockedLeadNames.length
+      ? "Chapter-one lead-name uniqueness guard:"
+      : null,
+    chapterNumber === 1 && crossBookBlockedLeadNames.length
+      ? `- For chapter 1, use a fresh lead name that is NOT in this blocked list from the reader's prior books: ${crossBookBlockedLeadNames.join(", ")}`
+      : null,
+    chapterNumber === 1 && crossBookBlockedLeadNames.length
+      ? "- If a blocked name appears at all, keep it background-only and never as the opening POV anchor."
       : null,
     "",
     "Continuity contract:",
     "- Treat the previous chapter ending as the immediate current reality for this chapter's opening.",
     "- Do not silently change place, time, weather, character positions, injuries, or objects in-hand.",
     "- If a transition is needed, explicitly narrate the move/time change before describing the new state.",
+    "- Treat locked session canon as immutable unless this is an explicitly new version.",
     "",
     `Target chapter number: ${chapterNumber}`,
     detail.libraryBook.chapterCap
@@ -1363,6 +2986,9 @@ function buildChapterPrompt(
     "- Each choice must be 2-3 complete sentences and specific to the chapter's events.",
     "- Each choice should be roughly 16-110 words, concrete, and immediately actionable.",
     "- Every choice must reference the chapter's concrete stakes, conflict, or revelation.",
+    "- Write choices in natural, human reader-facing language (what someone would actually choose next).",
+    "- Start each choice with a concrete action, and include specific chapter details (character, place, object, or revelation).",
+    "- Avoid abstract strategy wording like 'secure leverage', 'reshape position', or 'define central stakes'.",
     "- Avoid generic choices like 'continue' or 'see what happens'.",
     "- Keep chapter progression meaningful and coherent.",
     "- Do not wrap output in markdown fences or HTML tags such as <code>.",
@@ -1379,7 +3005,11 @@ function buildChapterExpansionPrompt(options: {
   currentChoices: string[];
   profile: ChapterGenerationProfile;
   overusedCharacterNames: string[];
+  crossBookBlockedLeadNames: string[];
+  canonContext: SessionCanonContext | null;
 }) {
+  const canonContextLines = formatSessionCanonContextLines(options.canonContext);
+
   return [
     "Revise and expand this chapter draft.",
     "Return valid JSON only, no markdown fences.",
@@ -1395,15 +3025,27 @@ function buildChapterExpansionPrompt(options: {
     "Current choices:",
     ...options.currentChoices.map((choice) => `- ${choice}`),
     "",
+    ...canonContextLines,
+    canonContextLines.length ? "" : null,
     options.overusedCharacterNames.length ? "Cross-book originality guard:" : null,
     options.overusedCharacterNames.length
       ? `- Avoid promoting these overused names into the central lead role unless canon explicitly requires it: ${options.overusedCharacterNames.join(", ")}`
+      : null,
+    options.chapterNumber === 1 && options.crossBookBlockedLeadNames.length
+      ? "Chapter-one lead-name uniqueness guard:"
+      : null,
+    options.chapterNumber === 1 && options.crossBookBlockedLeadNames.length
+      ? `- Keep chapter 1 lead names fresh. Do NOT use these blocked names from prior books as opening lead names: ${options.crossBookBlockedLeadNames.join(", ")}`
+      : null,
+    options.chapterNumber === 1 && options.crossBookBlockedLeadNames.length
+      ? "- If any blocked name appears, it must stay minor/background and not become the chapter's opening anchor."
       : null,
     "",
     "Continuity contract:",
     "- Keep the opening of this chapter anchored to the exact end state of the prior chapter unless an explicit transition is written on-page.",
     "- Do not silently change location, time of day, weather, injuries, objects in-hand, or character positions.",
     "- If scene/time/location changes, include a clear transition sentence before the new setting details.",
+    "- Keep locked session canon immutable; do not rename established characters or places.",
     "",
     "Requirements:",
     `- Expand chapterBody to ${options.profile.targetWordsMin} to ${options.profile.targetWordsMax} words.`,
@@ -1415,6 +3057,8 @@ function buildChapterExpansionPrompt(options: {
     "- Return exactly 3 strong next-chapter choices.",
     "- Each choice must be 2-3 complete sentences and grounded in chapter stakes.",
     "- Choices should be roughly 16-110 words, specific, and actionable (no vague filler).",
+    "- Keep the choice language human and concrete, with explicit actions tied to chapter details.",
+    "- Avoid abstract strategy jargon such as 'secure leverage', 'reshape position', or 'central stakes'.",
     "- Do not wrap output in markdown fences or HTML tags such as <code>.",
   ].join("\n");
 }
@@ -1426,7 +3070,10 @@ function buildChapterContinuityRevisionPrompt(options: {
   chapterTitle: string;
   chapterBody: string;
   profile: ChapterGenerationProfile;
+  canonContext: SessionCanonContext | null;
 }) {
+  const canonContextLines = formatSessionCanonContextLines(options.canonContext);
+
   return [
     "You are the InkBranch continuity editor.",
     "Your task is to enforce strict canon continuity between consecutive chapters.",
@@ -1448,12 +3095,15 @@ function buildChapterContinuityRevisionPrompt(options: {
     "Candidate chapter body:",
     options.chapterBody,
     "",
+    ...canonContextLines,
+    canonContextLines.length ? "" : null,
     "Continuity rules (must enforce):",
     "- The new chapter must begin from the same immediate reality as the previous chapter ending.",
     "- Do not silently move the story to a different location, time, or weather.",
     "- Do not silently reset injuries, object positions, clothing state, or unresolved actions.",
     "- If a location/time shift is needed, add explicit transition text that explains when/how the change happened.",
     "- Preserve established canon facts and character truths.",
+    "- Preserve locked session canon names and locations unless there is an explicit, narrated reveal.",
     "- Keep the chapter's core plot intent and momentum.",
     "",
     "Output requirements:",
@@ -2169,13 +3819,12 @@ export async function getReaderSessionDetail(
     );
     const fallbackTitle = parsedOutput.chapterTitle || `Chapter ${chapterNumber}`;
     const chapterViewpoints = viewpointsByChapterId.get(chapter.id) ?? [];
-    const characterCandidates = mergeDistinctCharacterNames(
-      listCharacterCandidatesFromChapter(
-        chapter.chapter_title?.trim() || fallbackTitle,
-        parsedOutput.chapterBody,
-      ),
-      chapterViewpoints.map((viewpoint) => viewpoint.characterName),
-    );
+    const characterCandidateSource = buildChapterViewpointCharacterCandidates({
+      chapterTitle: chapter.chapter_title?.trim() || fallbackTitle,
+      chapterBody: parsedOutput.chapterBody,
+      existingViewpointNames: chapterViewpoints.map((viewpoint) => viewpoint.characterName),
+    });
+    const characterCandidates = characterCandidateSource.candidates;
 
     return {
       id: chapter.id,
@@ -2252,9 +3901,13 @@ async function insertChapterTurn(options: {
   await db.query("BEGIN");
 
   try {
-    const lockResult = await db.query<{ status: ReaderSessionStatus }>(
+    const lockResult = await db.query<{
+      status: ReaderSessionStatus;
+      world_id: string;
+      reader_id: string;
+    }>(
       `
-        SELECT status
+        SELECT status, world_id, reader_id
         FROM story_sessions
         WHERE id = $1
         FOR UPDATE
@@ -2321,17 +3974,32 @@ async function insertChapterTurn(options: {
       [options.sessionId, nowIso],
     );
 
+    await persistSessionCanonStateForChapter({
+      db,
+      sessionId: options.sessionId,
+      worldId: locked.world_id,
+      readerId: locked.reader_id,
+      chapterId: turnId,
+      chapterNumber,
+      chapterTitle: fallbackTitle,
+      chapterBody: options.chapterBody,
+      choiceOptions: options.choiceOptions.slice(0, 3),
+      createdAtIso: nowIso,
+    });
+
     await db.query("COMMIT");
+    const characterCandidateSource = buildChapterViewpointCharacterCandidates({
+      chapterTitle: fallbackTitle,
+      chapterBody: options.chapterBody,
+      existingViewpointNames: [],
+    });
 
     return {
       id: turnId,
       chapterNumber,
       title: fallbackTitle,
       content: options.chapterBody,
-      characterCandidates: listCharacterCandidatesFromChapter(
-        fallbackTitle,
-        options.chapterBody,
-      ),
+      characterCandidates: characterCandidateSource.candidates,
       viewpoints: [],
       directionInput: options.directionInput,
       choiceOptions: options.choiceOptions.slice(0, 3),
@@ -2385,9 +4053,8 @@ async function insertChapterViewpoint(options: {
       `,
       [options.chapter.id],
     );
-    const requestedCharacterKey = toCharacterIdentityKey(options.characterName);
     const conflictingViewpoint = existingViewpointsResult.rows.find(
-      (row) => toCharacterIdentityKey(row.character_name) === requestedCharacterKey,
+      (row) => areCharacterIdentityEquivalent(row.character_name, options.characterName),
     );
 
     if (conflictingViewpoint) {
@@ -2504,9 +4171,22 @@ export async function generateChapterViewpoint(options: {
     throw new Error("Chapter not found in this session.");
   }
 
-  const requestedCharacterKey = toCharacterIdentityKey(characterName);
+  const chapterPrimaryPov = inferPrimaryChapterPovCharacter(
+    chapter.title,
+    chapter.content,
+  );
+
+  if (
+    chapterPrimaryPov &&
+    areCharacterIdentityEquivalent(characterName, chapterPrimaryPov)
+  ) {
+    throw new Error(
+      `${chapterPrimaryPov} is already the chapter's primary POV. Choose a different character viewpoint.`,
+    );
+  }
+
   const existingViewpoint = chapter.viewpoints.find(
-    (viewpoint) => toCharacterIdentityKey(viewpoint.characterName) === requestedCharacterKey,
+    (viewpoint) => areCharacterIdentityEquivalent(viewpoint.characterName, characterName),
   );
 
   if (existingViewpoint) {
@@ -2740,12 +4420,25 @@ export async function generateNextChapter(options: {
   }
 
   const chapterCap = detail.libraryBook.chapterCap;
+  const chapterNumber = detail.chapters.length + 1;
+  const applyCrossBookLeadNameGuard = chapterNumber === 1;
+  const canonContext = chapterNumber > 1
+    ? await getSessionCanonContext(options.sessionId)
+    : null;
   const generationProfile = resolveChapterGenerationProfile();
   const minimumAcceptedWords = resolveMinimumAcceptedChapterWords(generationProfile);
-  const overusedCharacterNames = await listOverusedCharacterNamesForReader({
-    readerId: options.user.id,
-    currentWorldId: detail.libraryBook.worldId,
-  });
+  const overusedCharacterNames = applyCrossBookLeadNameGuard
+    ? await listOverusedCharacterNamesForReader({
+        readerId: options.user.id,
+        currentWorldId: detail.libraryBook.worldId,
+      })
+    : [];
+  const crossBookBlockedLeadNames = applyCrossBookLeadNameGuard
+    ? await listCrossBookBlockedLeadNamesForReader({
+        readerId: options.user.id,
+        currentWorldId: detail.libraryBook.worldId,
+      })
+    : [];
 
   if (chapterCap && detail.chapters.length >= chapterCap) {
     await markSessionCompleted(options.sessionId);
@@ -2754,7 +4447,6 @@ export async function generateNextChapter(options: {
     );
   }
 
-  const chapterNumber = detail.chapters.length + 1;
   let parsed = {
     chapterTitle: `Chapter ${chapterNumber}`,
     chapterBody: "",
@@ -2776,6 +4468,8 @@ export async function generateNextChapter(options: {
             direction,
             generationProfile,
             overusedCharacterNames,
+            crossBookBlockedLeadNames,
+            canonContext,
           )
         : buildChapterExpansionPrompt({
             chapterNumber,
@@ -2785,6 +4479,8 @@ export async function generateNextChapter(options: {
             currentChoices: parsed.choiceOptions,
             profile: generationProfile,
             overusedCharacterNames,
+            crossBookBlockedLeadNames,
+            canonContext,
           });
 
     const generated = await generateStoryText({
@@ -2799,10 +4495,14 @@ export async function generateNextChapter(options: {
     });
     modelUsed = generated.model;
     chapterWordCount = countWords(parsed.chapterBody);
+    const blockedLeadNameCollisions = applyCrossBookLeadNameGuard
+      ? findBlockedLeadNamesInChapterOpening(parsed.chapterBody, crossBookBlockedLeadNames)
+      : [];
 
     if (
       chapterWordCount >= generationProfile.targetWordsMin &&
-      !hasLikelyAbruptEnding(parsed.chapterBody)
+      !hasLikelyAbruptEnding(parsed.chapterBody) &&
+      blockedLeadNameCollisions.length === 0
     ) {
       break;
     }
@@ -2815,8 +4515,11 @@ export async function generateNextChapter(options: {
   ) {
     const stillTooShort = chapterWordCount < generationProfile.targetWordsMin;
     const likelyCutOff = hasLikelyAbruptEnding(parsed.chapterBody);
+    const blockedLeadNameCollisions = applyCrossBookLeadNameGuard
+      ? findBlockedLeadNamesInChapterOpening(parsed.chapterBody, crossBookBlockedLeadNames)
+      : [];
 
-    if (!stillTooShort && !likelyCutOff) {
+    if (!stillTooShort && !likelyCutOff && blockedLeadNameCollisions.length === 0) {
       break;
     }
 
@@ -2829,6 +4532,8 @@ export async function generateNextChapter(options: {
         currentChoices: parsed.choiceOptions,
         profile: generationProfile,
         overusedCharacterNames,
+        crossBookBlockedLeadNames,
+        canonContext,
       }),
       model: options.model,
       maxOutputTokens: generationProfile.maxOutputTokens + 800,
@@ -2855,6 +4560,7 @@ export async function generateNextChapter(options: {
         chapterTitle: parsed.chapterTitle,
         chapterBody: parsed.chapterBody,
         profile: generationProfile,
+        canonContext,
       }),
       model: options.model,
       maxOutputTokens: generationProfile.maxOutputTokens + 900,
@@ -2872,6 +4578,35 @@ export async function generateNextChapter(options: {
       parsed.chapterBody = revised.chapterBody;
       modelUsed = reviewed.model;
       chapterWordCount = countWords(parsed.chapterBody);
+    }
+  }
+
+  if (chapterNumber > 1) {
+    const canonValidationViolations = validateChapterAgainstSessionCanon({
+      chapterNumber,
+      chapterBody: parsed.chapterBody,
+      chapterTitle: parsed.chapterTitle,
+      canonContext,
+    });
+
+    if (canonValidationViolations.length > 0) {
+      throw new Error(
+        `Canon validation blocked this chapter: ${canonValidationViolations[0]}`,
+      );
+    }
+  }
+
+  if (applyCrossBookLeadNameGuard) {
+    const blockedLeadNameCollisions = findBlockedLeadNamesInChapterOpening(
+      parsed.chapterBody,
+      crossBookBlockedLeadNames,
+    );
+
+    if (blockedLeadNameCollisions.length > 0) {
+      const namePreview = blockedLeadNameCollisions.slice(0, 4).join(", ");
+      throw new Error(
+        `Chapter generation reused prior lead names (${namePreview}). Please retry to generate a fresh chapter-one lead.`,
+      );
     }
   }
 

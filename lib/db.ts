@@ -172,6 +172,52 @@ async function initializeSchema() {
       created_at TIMESTAMPTZ NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS session_canon_baselines (
+      session_id TEXT PRIMARY KEY REFERENCES story_sessions(id) ON DELETE CASCADE,
+      world_id TEXT NOT NULL REFERENCES story_worlds(id) ON DELETE CASCADE,
+      reader_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      source_chapter_id TEXT REFERENCES story_turns(id) ON DELETE SET NULL,
+      source_chapter_number INTEGER NOT NULL,
+      chapter_one_summary TEXT,
+      lead_character_names TEXT NOT NULL DEFAULT '[]',
+      notable_place_names TEXT NOT NULL DEFAULT '[]',
+      canonical_facts TEXT NOT NULL DEFAULT '[]',
+      created_at TIMESTAMPTZ NOT NULL,
+      updated_at TIMESTAMPTZ NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS session_chapter_snapshots (
+      id TEXT PRIMARY KEY,
+      session_id TEXT NOT NULL REFERENCES story_sessions(id) ON DELETE CASCADE,
+      chapter_id TEXT NOT NULL REFERENCES story_turns(id) ON DELETE CASCADE,
+      chapter_number INTEGER NOT NULL,
+      chapter_title TEXT NOT NULL,
+      opening_state TEXT,
+      ending_state TEXT,
+      active_character_names TEXT NOT NULL DEFAULT '[]',
+      active_place_names TEXT NOT NULL DEFAULT '[]',
+      unresolved_threads TEXT NOT NULL DEFAULT '[]',
+      major_events TEXT NOT NULL DEFAULT '[]',
+      created_at TIMESTAMPTZ NOT NULL,
+      updated_at TIMESTAMPTZ NOT NULL,
+      UNIQUE(session_id, chapter_number),
+      UNIQUE(chapter_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS session_event_ledger (
+      id TEXT PRIMARY KEY,
+      session_id TEXT NOT NULL REFERENCES story_sessions(id) ON DELETE CASCADE,
+      chapter_id TEXT NOT NULL REFERENCES story_turns(id) ON DELETE CASCADE,
+      chapter_number INTEGER NOT NULL,
+      event_kind TEXT NOT NULL DEFAULT 'EVENT'
+        CHECK (event_kind IN ('EVENT', 'REVEAL', 'COMMITMENT', 'STATE_CHANGE', 'CLIFFHANGER')),
+      summary TEXT NOT NULL,
+      subject_key TEXT,
+      importance INTEGER NOT NULL DEFAULT 1
+        CHECK (importance BETWEEN 1 AND 5),
+      created_at TIMESTAMPTZ NOT NULL
+    );
+
     ALTER TABLE story_turns
       ADD COLUMN IF NOT EXISTS chapter_title TEXT;
     ALTER TABLE story_turns
@@ -212,6 +258,12 @@ async function initializeSchema() {
     CREATE INDEX IF NOT EXISTS story_turns_session_idx ON story_turns(session_id);
     CREATE INDEX IF NOT EXISTS chapter_viewpoints_chapter_created_idx ON chapter_viewpoints(chapter_id, created_at);
     CREATE INDEX IF NOT EXISTS chapter_viewpoints_character_idx ON chapter_viewpoints(character_name);
+    CREATE INDEX IF NOT EXISTS session_canon_baselines_world_reader_idx ON session_canon_baselines(world_id, reader_id);
+    CREATE INDEX IF NOT EXISTS session_canon_baselines_updated_idx ON session_canon_baselines(updated_at);
+    CREATE INDEX IF NOT EXISTS session_chapter_snapshots_session_updated_idx ON session_chapter_snapshots(session_id, updated_at);
+    CREATE INDEX IF NOT EXISTS session_event_ledger_session_chapter_idx ON session_event_ledger(session_id, chapter_number);
+    CREATE INDEX IF NOT EXISTS session_event_ledger_session_importance_idx ON session_event_ledger(session_id, importance);
+    CREATE INDEX IF NOT EXISTS session_event_ledger_chapter_idx ON session_event_ledger(chapter_id);
   `);
 }
 

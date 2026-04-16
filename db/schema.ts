@@ -256,3 +256,115 @@ export const chapterViewpoints = pgTable(
     index("chapter_viewpoints_character_idx").on(table.characterName),
   ],
 );
+
+export const sessionCanonBaselines = pgTable(
+  "session_canon_baselines",
+  {
+    sessionId: text("session_id")
+      .primaryKey()
+      .references(() => storySessions.id, { onDelete: "cascade" }),
+    worldId: text("world_id")
+      .notNull()
+      .references(() => storyWorlds.id, { onDelete: "cascade" }),
+    readerId: text("reader_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    sourceChapterId: text("source_chapter_id").references(() => storyTurns.id, {
+      onDelete: "set null",
+    }),
+    sourceChapterNumber: integer("source_chapter_number").notNull(),
+    chapterOneSummary: text("chapter_one_summary"),
+    leadCharacterNames: text("lead_character_names").notNull().default("[]"),
+    notablePlaceNames: text("notable_place_names").notNull().default("[]"),
+    canonicalFacts: text("canonical_facts").notNull().default("[]"),
+    createdAt: timestamp("created_at", {
+      withTimezone: true,
+      mode: "date",
+    }).notNull(),
+    updatedAt: timestamp("updated_at", {
+      withTimezone: true,
+      mode: "date",
+    }).notNull(),
+  },
+  (table) => [
+    index("session_canon_baselines_world_reader_idx").on(table.worldId, table.readerId),
+    index("session_canon_baselines_updated_idx").on(table.updatedAt),
+  ],
+);
+
+export const sessionChapterSnapshots = pgTable(
+  "session_chapter_snapshots",
+  {
+    id: text("id").primaryKey(),
+    sessionId: text("session_id")
+      .notNull()
+      .references(() => storySessions.id, { onDelete: "cascade" }),
+    chapterId: text("chapter_id")
+      .notNull()
+      .references(() => storyTurns.id, { onDelete: "cascade" }),
+    chapterNumber: integer("chapter_number").notNull(),
+    chapterTitle: text("chapter_title").notNull(),
+    openingState: text("opening_state"),
+    endingState: text("ending_state"),
+    activeCharacterNames: text("active_character_names").notNull().default("[]"),
+    activePlaceNames: text("active_place_names").notNull().default("[]"),
+    unresolvedThreads: text("unresolved_threads").notNull().default("[]"),
+    majorEvents: text("major_events").notNull().default("[]"),
+    createdAt: timestamp("created_at", {
+      withTimezone: true,
+      mode: "date",
+    }).notNull(),
+    updatedAt: timestamp("updated_at", {
+      withTimezone: true,
+      mode: "date",
+    }).notNull(),
+  },
+  (table) => [
+    uniqueIndex("session_chapter_snapshots_session_chapter_uidx").on(
+      table.sessionId,
+      table.chapterNumber,
+    ),
+    uniqueIndex("session_chapter_snapshots_chapter_uidx").on(table.chapterId),
+    index("session_chapter_snapshots_session_updated_idx").on(
+      table.sessionId,
+      table.updatedAt,
+    ),
+  ],
+);
+
+export const sessionEventLedger = pgTable(
+  "session_event_ledger",
+  {
+    id: text("id").primaryKey(),
+    sessionId: text("session_id")
+      .notNull()
+      .references(() => storySessions.id, { onDelete: "cascade" }),
+    chapterId: text("chapter_id")
+      .notNull()
+      .references(() => storyTurns.id, { onDelete: "cascade" }),
+    chapterNumber: integer("chapter_number").notNull(),
+    eventKind: text("event_kind", {
+      enum: ["EVENT", "REVEAL", "COMMITMENT", "STATE_CHANGE", "CLIFFHANGER"],
+    })
+      .notNull()
+      .default("EVENT"),
+    summary: text("summary").notNull(),
+    subjectKey: text("subject_key"),
+    importance: integer("importance").notNull().default(1),
+    createdAt: timestamp("created_at", {
+      withTimezone: true,
+      mode: "date",
+    }).notNull(),
+  },
+  (table) => [
+    index("session_event_ledger_session_chapter_idx").on(
+      table.sessionId,
+      table.chapterNumber,
+    ),
+    index("session_event_ledger_session_importance_idx").on(
+      table.sessionId,
+      table.importance,
+    ),
+    index("session_event_ledger_chapter_idx").on(table.chapterId),
+  ],
+);

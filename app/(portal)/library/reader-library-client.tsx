@@ -273,6 +273,98 @@ function toCharacterIdentityKey(name: string) {
   return parts.join(" ");
 }
 
+function areCharacterIdentityEquivalent(left: string, right: string) {
+  const leftKey = toCharacterIdentityKey(left);
+  const rightKey = toCharacterIdentityKey(right);
+
+  if (!leftKey || !rightKey) {
+    return false;
+  }
+
+  if (leftKey === rightKey) {
+    return true;
+  }
+
+  const leftParts = leftKey.split(" ").filter(Boolean);
+  const rightParts = rightKey.split(" ").filter(Boolean);
+
+  if (leftParts.length === 0 || rightParts.length === 0) {
+    return false;
+  }
+
+  if (leftParts[0] !== rightParts[0]) {
+    return false;
+  }
+
+  if (leftParts.length === 1 || rightParts.length === 1) {
+    return true;
+  }
+
+  return false;
+}
+
+function choosePreferredCharacterDisplayName(currentName: string, nextName: string) {
+  const currentNormalized = currentName.replace(/\s+/g, " ").trim();
+  const nextNormalized = nextName.replace(/\s+/g, " ").trim();
+
+  if (!currentNormalized) {
+    return nextNormalized;
+  }
+
+  if (!nextNormalized) {
+    return currentNormalized;
+  }
+
+  const currentParts = currentNormalized.split(" ").filter(Boolean);
+  const nextParts = nextNormalized.split(" ").filter(Boolean);
+
+  if (nextParts.length > currentParts.length) {
+    return nextNormalized;
+  }
+
+  if (currentParts.length > nextParts.length) {
+    return currentNormalized;
+  }
+
+  return nextNormalized.length > currentNormalized.length
+    ? nextNormalized
+    : currentNormalized;
+}
+
+function mergeCharacterCandidatesForViewpoints(...groups: Array<readonly string[]>) {
+  const merged: string[] = [];
+
+  for (const group of groups) {
+    for (const rawName of group) {
+      const normalized = rawName.replace(/\s+/g, " ").trim();
+
+      if (!normalized) {
+        continue;
+      }
+
+      const existingIndex = merged.findIndex((candidate) =>
+        areCharacterIdentityEquivalent(candidate, normalized),
+      );
+
+      if (existingIndex >= 0) {
+        merged[existingIndex] = choosePreferredCharacterDisplayName(
+          merged[existingIndex],
+          normalized,
+        );
+        continue;
+      }
+
+      merged.push(normalized);
+
+      if (merged.length >= 10) {
+        return merged;
+      }
+    }
+  }
+
+  return merged;
+}
+
 function updateBooksAfterReading(
   books: LibraryBook[],
   session: ReaderSessionDetail,
@@ -634,17 +726,18 @@ export function LibraryReaderClient({
   const selectedViewpoint =
     selectedChapter?.viewpoints.find((viewpoint) => viewpoint.id === selectedViewpointId) ??
     null;
-  const selectedViewpointCharacterIdentityKey = toCharacterIdentityKey(
-    viewpointCharacterName,
-  );
+  const normalizedViewpointCharacterInput = viewpointCharacterName.trim();
   const duplicateViewpointForSelectedCharacter =
-    selectedChapter?.viewpoints.find(
-      (viewpoint) =>
-        toCharacterIdentityKey(viewpoint.characterName) ===
-        selectedViewpointCharacterIdentityKey,
-    ) ?? null;
+    normalizedViewpointCharacterInput
+      ? selectedChapter?.viewpoints.find((viewpoint) =>
+          areCharacterIdentityEquivalent(
+            viewpoint.characterName,
+            normalizedViewpointCharacterInput,
+          ),
+        ) ?? null
+      : null;
   const hasDuplicateViewpointForSelectedCharacter = Boolean(
-    selectedViewpointCharacterIdentityKey && duplicateViewpointForSelectedCharacter,
+    normalizedViewpointCharacterInput && duplicateViewpointForSelectedCharacter,
   );
   const selectedChapterIndex = selectedChapter
     ? activeSession?.chapters.findIndex((chapter) => chapter.id === selectedChapter.id) ?? -1
@@ -1215,10 +1308,8 @@ export function LibraryReaderClient({
       return;
     }
 
-    const requestedCharacterKey = toCharacterIdentityKey(characterName);
     const existingViewpoint = selectedChapter.viewpoints.find(
-      (viewpoint) =>
-        toCharacterIdentityKey(viewpoint.characterName) === requestedCharacterKey,
+      (viewpoint) => areCharacterIdentityEquivalent(viewpoint.characterName, characterName),
     );
 
     if (existingViewpoint) {
@@ -1280,11 +1371,10 @@ export function LibraryReaderClient({
 
             return {
               ...chapter,
-              characterCandidates: chapter.characterCandidates.some(
-                (name) => name.toLowerCase() === viewpoint.characterName.toLowerCase(),
-              )
-                ? chapter.characterCandidates
-                : [viewpoint.characterName, ...chapter.characterCandidates].slice(0, 10),
+              characterCandidates: mergeCharacterCandidatesForViewpoints(
+                chapter.characterCandidates,
+                [viewpoint.characterName],
+              ).slice(0, 10),
               viewpoints: [...chapter.viewpoints, viewpoint],
             };
           }),
@@ -1672,10 +1762,9 @@ export function LibraryReaderClient({
                 <div className="flex flex-wrap gap-2">
                   {selectedChapter.characterCandidates.map((name) => (
                     (() => {
-                      const candidateKey = toCharacterIdentityKey(name);
                       const hasExistingViewpoint = selectedChapter.viewpoints.some(
                         (viewpoint) =>
-                          toCharacterIdentityKey(viewpoint.characterName) === candidateKey,
+                          areCharacterIdentityEquivalent(viewpoint.characterName, name),
                       );
 
                       return (
@@ -1685,7 +1774,7 @@ export function LibraryReaderClient({
                           onClick={() => setViewpointCharacterName(name)}
                           disabled={hasExistingViewpoint}
                           className={`rounded-full border px-2.5 py-1 text-[11px] font-semibold transition ${
-                            viewpointCharacterName.trim().toLowerCase() === name.toLowerCase()
+                            areCharacterIdentityEquivalent(viewpointCharacterName, name)
                               ? "border-[var(--focus-border)] bg-white/75 text-[var(--ink)]"
                               : "border-[var(--parchment-border)] text-[var(--ink-muted)] hover:bg-white/65"
                           } ${hasExistingViewpoint ? "cursor-not-allowed opacity-60" : ""}`}

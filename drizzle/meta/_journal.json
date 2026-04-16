@@ -64,6 +64,13 @@
       "when": 1776353718365,
       "tag": "0008_big_zeigeist",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1776381120000,
+      "tag": "0009_session_canon_snapshots",
+      "breakpoints": true
     }
   ]
 }
