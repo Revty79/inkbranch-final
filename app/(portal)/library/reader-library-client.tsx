@@ -437,7 +437,7 @@ export function LibraryReaderClient({
   const [isStartingBookId, setIsStartingBookId] = useState<string | null>(null);
   const [isLoadingSession, setIsLoadingSession] = useState(false);
   const [isGeneratingChapter, setIsGeneratingChapter] = useState(false);
-  const [isChapterContinuationLocked, setIsChapterContinuationLocked] = useState(true);
+  const [isChapterContinuationLocked, setIsChapterContinuationLocked] = useState(false);
   const [isGeneratingViewpoint, setIsGeneratingViewpoint] = useState(false);
   const [message, setMessage] = useState<Message | null>(null);
   const [selectedChapterId, setSelectedChapterId] = useState<string | null>(
@@ -489,6 +489,12 @@ export function LibraryReaderClient({
   const selectedChapterIndex = selectedChapter
     ? activeSession?.chapters.findIndex((chapter) => chapter.id === selectedChapter.id) ?? -1
     : -1;
+  const hasExistingContinuationFromSelectedChapter = Boolean(
+    activeSession &&
+      selectedChapterIndex >= 0 &&
+      selectedChapterIndex < activeSession.chapters.length - 1,
+  );
+  const continuationRequiresUnlock = hasExistingContinuationFromSelectedChapter;
   const normalizedPageIndex =
     selectedChapterPages.length === 0
       ? 0
@@ -505,7 +511,7 @@ export function LibraryReaderClient({
       latestChapter &&
       isLatestChapterSelected &&
       isAtEndOfChapter &&
-      !isChapterContinuationLocked &&
+      (!continuationRequiresUnlock || !isChapterContinuationLocked) &&
       !isGeneratingChapter &&
       !isGeneratingViewpoint &&
       !isLoadingSession,
@@ -570,8 +576,20 @@ export function LibraryReaderClient({
 
   useEffect(() => {
     setSelectedPageIndex(0);
-    setIsChapterContinuationLocked(true);
   }, [selectedChapterId]);
+
+  useEffect(() => {
+    if (!activeSession || !selectedChapter) {
+      setIsChapterContinuationLocked(false);
+      return;
+    }
+
+    if (hasExistingContinuationFromSelectedChapter) {
+      setIsChapterContinuationLocked(true);
+    } else {
+      setIsChapterContinuationLocked(false);
+    }
+  }, [activeSession, selectedChapter, hasExistingContinuationFromSelectedChapter]);
 
   useEffect(() => {
     if (!activeSession) {
@@ -834,7 +852,6 @@ export function LibraryReaderClient({
       setSelectedChapterId(
         readingSession.chapters[readingSession.chapters.length - 1]?.id ?? null,
       );
-      setIsChapterContinuationLocked(true);
       setSelectedViewpointId(null);
       setSelectedPageIndex(0);
       setDirectionInput("");
@@ -889,7 +906,6 @@ export function LibraryReaderClient({
       setSelectedChapterId(
         payload.session.chapters[payload.session.chapters.length - 1]?.id ?? null,
       );
-      setIsChapterContinuationLocked(true);
       setSelectedViewpointId(null);
       setSelectedPageIndex(0);
       setDirectionInput("");
@@ -919,7 +935,7 @@ export function LibraryReaderClient({
       return;
     }
 
-    if (isChapterContinuationLocked) {
+    if (continuationRequiresUnlock && isChapterContinuationLocked) {
       setMessage({
         type: "error",
         text: "Chapter continuation is locked. Unlock it before generating the next chapter.",
@@ -982,7 +998,6 @@ export function LibraryReaderClient({
       setSelectedChapterId(chapter.id);
       setSelectedViewpointId(null);
       setSelectedPageIndex(0);
-      setIsChapterContinuationLocked(true);
 
       setSessions((current) =>
         updateSessionAfterChapter(
@@ -1354,30 +1369,33 @@ export function LibraryReaderClient({
         >
           <div className="flex flex-wrap items-center justify-between gap-2">
             <p className="text-sm font-semibold">How should the next chapter go?</p>
-            <button
-              type="button"
-              onClick={() =>
-                setIsChapterContinuationLocked((current) => !current)
-              }
-              disabled={isGeneratingChapter || isGeneratingViewpoint || isLoadingSession}
-              className={`rounded-full border px-3 py-1 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-70 ${
-                isChapterContinuationLocked
-                  ? "border-amber-700/45 bg-amber-100/70 text-amber-900 hover:bg-amber-100"
-                  : "border-emerald-700/40 bg-emerald-100/70 text-emerald-900 hover:bg-emerald-100"
+            <span
+              className={`rounded-full border px-3 py-1 text-xs font-semibold ${
+                continuationRequiresUnlock && isChapterContinuationLocked
+                  ? "border-amber-700/45 bg-amber-100/70 text-amber-900"
+                  : continuationRequiresUnlock
+                    ? "border-emerald-700/40 bg-emerald-100/70 text-emerald-900"
+                  : "border-emerald-700/40 bg-emerald-100/70 text-emerald-900"
               }`}
             >
-              {isChapterContinuationLocked ? "Continuation Locked" : "Continuation Unlocked"}
-            </button>
+              {continuationRequiresUnlock
+                ? isChapterContinuationLocked
+                  ? "Locked"
+                  : "Unlocked"
+                : "No Lock Needed"}
+            </span>
           </div>
           <p className="text-xs text-[var(--ink-muted)]">
-            {isChapterContinuationLocked
+            {continuationRequiresUnlock && isChapterContinuationLocked
               ? "Lock is on by default to prevent accidental chapter regeneration. Unlock only when you are ready to continue."
+              : !continuationRequiresUnlock
+                ? "This is a brand-new continuation point, so no unlock is required."
               : !latestChapter
               ? "Waiting for chapter 1..."
               : !isLatestChapterSelected
                 ? "Select the latest chapter in the list to continue the book."
                 : !isAtEndOfChapter
-                  ? "Turn to the last page of this chapter to unlock generation."
+                  ? "Turn to the last page of this chapter to enable generation."
                   : "Ready. Choose a suggestion or write your own direction."}
           </p>
 
@@ -1406,6 +1424,30 @@ export function LibraryReaderClient({
           />
 
           <button
+            type="button"
+            onClick={() =>
+              setIsChapterContinuationLocked((current) => !current)
+            }
+            disabled={
+              !continuationRequiresUnlock ||
+              isGeneratingChapter ||
+              isGeneratingViewpoint ||
+              isLoadingSession
+            }
+            className={`w-full rounded-full border px-4 py-2 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-70 ${
+              isChapterContinuationLocked
+                ? "border-amber-700/45 bg-amber-100/70 text-amber-900 hover:bg-amber-100"
+                : "border-emerald-700/40 bg-emerald-100/70 text-emerald-900 hover:bg-emerald-100"
+            }`}
+          >
+            {!continuationRequiresUnlock
+              ? "Lock Not Required For This Next Chapter"
+              : isChapterContinuationLocked
+                ? "Unlock Chapter Continuation"
+                : "Relock Chapter Continuation"}
+          </button>
+
+          <button
             type="submit"
             disabled={!canGenerateNextChapter}
             className="parchment-button rounded-full px-4 py-2 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-70"
@@ -1416,7 +1458,7 @@ export function LibraryReaderClient({
                 ? "Generating Viewpoint..."
               : isLoadingSession
                 ? "Loading..."
-                : isChapterContinuationLocked
+                : continuationRequiresUnlock && isChapterContinuationLocked
                   ? "Unlock To Continue"
                 : !canGenerateNextChapter
                   ? "Reach Chapter End To Continue"
