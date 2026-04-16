@@ -149,3 +149,35 @@ export async function updateUserRole(email: string, role: AppRole) {
     updatedAt,
   };
 }
+
+export async function updateUserRoleById(userId: string, role: AppRole) {
+  const normalizedId = userId.trim();
+
+  if (!normalizedId) {
+    return null;
+  }
+
+  const db = await getDatabase();
+  const existingUser = await findUserById(normalizedId);
+
+  if (!existingUser) {
+    return null;
+  }
+
+  const updatedAt = new Date().toISOString();
+
+  await db.query(
+    `
+      UPDATE users
+      SET role = $1, updated_at = $2
+      WHERE id = $3
+    `,
+    [role, updatedAt, normalizedId],
+  );
+
+  return {
+    ...existingUser,
+    role,
+    updatedAt,
+  };
+}

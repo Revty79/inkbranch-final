@@ -1,5 +1,10 @@
 import { requireAuthorizedUser } from "@/lib/auth";
-import { listAdminReaderBookEngagement } from "@/lib/admin-office";
+import {
+  listAdminReaderBookEngagement,
+  listAdminUserRoleDirectory,
+} from "@/lib/admin-office";
+
+import { RoleManagementClient } from "./role-management-client";
 
 const adminAreas = [
   {
@@ -65,8 +70,11 @@ function formatDateTime(value: string | null) {
 }
 
 export default async function AdministrationOfficePage() {
-  await requireAuthorizedUser(["ADMIN"]);
-  const readerEngagement = await listAdminReaderBookEngagement();
+  const user = await requireAuthorizedUser(["ADMIN"]);
+  const [readerEngagement, roleDirectory] = await Promise.all([
+    listAdminReaderBookEngagement(),
+    listAdminUserRoleDirectory(),
+  ]);
   const usersTracked = readerEngagement.length;
   const totalBooksOwned = readerEngagement.reduce((sum, row) => sum + row.booksOwned, 0);
   const totalReadingSeconds = readerEngagement.reduce(
@@ -133,6 +141,11 @@ export default async function AdministrationOfficePage() {
           <p className="mt-2 text-3xl font-semibold">{usersWithReadingTime}</p>
         </article>
       </section>
+
+      <RoleManagementClient
+        initialUsers={roleDirectory}
+        currentAdminUserId={user.id}
+      />
 
       <section className="parchment-card rounded-2xl p-4 shadow-lg sm:p-5">
         <div className="space-y-1">

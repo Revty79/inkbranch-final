@@ -13,6 +13,15 @@ type ReaderBookEngagementRow = {
   recent_books: string[] | null;
 };
 
+type AdminUserRoleRow = {
+  id: string;
+  email: string;
+  name: string | null;
+  role: AppRole;
+  created_at: Date | string;
+  updated_at: Date | string;
+};
+
 export type AdminReaderBookEngagement = {
   userId: string;
   email: string;
@@ -23,6 +32,15 @@ export type AdminReaderBookEngagement = {
   totalReadingSeconds: number;
   lastSessionUpdatedAt: string | null;
   recentBooks: string[];
+};
+
+export type AdminUserRoleDirectoryItem = {
+  userId: string;
+  email: string;
+  name: string | null;
+  role: AppRole;
+  createdAt: string;
+  updatedAt: string;
 };
 
 function toNumber(value: number | string | null | undefined) {
@@ -107,5 +125,38 @@ export async function listAdminReaderBookEngagement(
       ? new Date(row.last_session_updated_at).toISOString()
       : null,
     recentBooks: row.recent_books ?? [],
+  }));
+}
+
+export async function listAdminUserRoleDirectory(
+  limit = 1500,
+): Promise<AdminUserRoleDirectoryItem[]> {
+  const safeLimit = Number.isFinite(limit)
+    ? Math.max(1, Math.min(Math.floor(limit), 5000))
+    : 1500;
+  const db = await getDatabase();
+  const result = await db.query<AdminUserRoleRow>(
+    `
+      SELECT
+        id,
+        email,
+        name,
+        role,
+        created_at,
+        updated_at
+      FROM users
+      ORDER BY created_at DESC
+      LIMIT $1
+    `,
+    [safeLimit],
+  );
+
+  return result.rows.map((row) => ({
+    userId: row.id,
+    email: row.email,
+    name: row.name,
+    role: row.role,
+    createdAt: new Date(row.created_at).toISOString(),
+    updatedAt: new Date(row.updated_at).toISOString(),
   }));
 }
