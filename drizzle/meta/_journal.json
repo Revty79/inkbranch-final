@@ -50,6 +50,13 @@
       "when": 1776128192172,
       "tag": "0006_admin_reader_time_tracking",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1776297600000,
+      "tag": "0007_chapter_viewpoints",
+      "breakpoints": true
     }
   ]
 }

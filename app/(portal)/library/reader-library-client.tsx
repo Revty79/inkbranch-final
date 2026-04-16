@@ -6,6 +6,8 @@ import type {
   CatalogWorld,
   LibraryBook,
   ReaderChapter,
+  ReaderChapterViewpoint,
+  ReaderChapterViewpointLens,
   ReaderSessionDetail,
   ReaderSessionSummary,
 } from "@/lib/reader-runtime";
@@ -28,6 +30,54 @@ const MIN_READER_VIEWPORT_HEIGHT = 180;
 const MOBILE_READER_PAGINATION_MAX_WIDTH = 768;
 const READING_ACTIVITY_PING_INTERVAL_MS = 30_000;
 const READING_ACTIVITY_MAX_SECONDS_PER_PING = 45;
+const MAX_VIEWPOINT_DIRECTION_INPUT_LENGTH = 1600;
+
+const VIEWPOINT_LENS_OPTIONS: Array<{
+  lens: ReaderChapterViewpointLens;
+  label: string;
+  description: string;
+}> = [
+  {
+    lens: "MOMENT",
+    label: "Moment",
+    description: "Short emotional snapshot of this chapter.",
+  },
+  {
+    lens: "THREAD",
+    label: "Thread",
+    description: "Longer side story that deepens chapter events.",
+  },
+  {
+    lens: "SPINOFF",
+    label: "Spinoff Seed",
+    description: "Largest cut with momentum for a future standalone.",
+  },
+];
+const VIEWPOINT_CHARACTER_TITLE_PREFIXES = new Set([
+  "lady",
+  "lord",
+  "sir",
+  "madam",
+  "dame",
+  "captain",
+  "commander",
+  "master",
+  "mistress",
+  "queen",
+  "king",
+  "prince",
+  "princess",
+  "duke",
+  "duchess",
+  "baron",
+  "baroness",
+  "count",
+  "countess",
+  "mr",
+  "mrs",
+  "ms",
+  "dr",
+]);
 
 type ReaderPageViewport = {
   width: number;
@@ -71,6 +121,58 @@ function updateSessionAfterChapter(
       updatedAt,
     };
   });
+}
+
+function updateSessionTimestamp(
+  sessions: ReaderSessionSummary[],
+  sessionId: string,
+  updatedAt: string,
+) {
+  return sessions.map((session) => {
+    if (session.id !== sessionId) {
+      return session;
+    }
+
+    return {
+      ...session,
+      updatedAt,
+    };
+  });
+}
+
+function describeViewpointLens(lens: ReaderChapterViewpointLens) {
+  switch (lens) {
+    case "THREAD":
+      return "Thread";
+    case "SPINOFF":
+      return "Spinoff Seed";
+    default:
+      return "Moment";
+  }
+}
+
+function toCharacterIdentityKey(name: string) {
+  const normalized = name
+    .replace(/\./g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+
+  if (!normalized) {
+    return "";
+  }
+
+  const parts = normalized.split(" ").filter(Boolean);
+
+  if (parts.length === 0) {
+    return "";
+  }
+
+  if (parts.length >= 2 && VIEWPOINT_CHARACTER_TITLE_PREFIXES.has(parts[0])) {
+    return parts.slice(1).join(" ");
+  }
+
+  return parts.join(" ");
 }
 
 function updateBooksAfterReading(
@@ -335,16 +437,23 @@ export function LibraryReaderClient({
   const [isStartingBookId, setIsStartingBookId] = useState<string | null>(null);
   const [isLoadingSession, setIsLoadingSession] = useState(false);
   const [isGeneratingChapter, setIsGeneratingChapter] = useState(false);
+  const [isGeneratingViewpoint, setIsGeneratingViewpoint] = useState(false);
   const [message, setMessage] = useState<Message | null>(null);
   const [selectedChapterId, setSelectedChapterId] = useState<string | null>(
     initialActiveSession?.chapters[initialActiveSession.chapters.length - 1]?.id ??
       null,
   );
+  const [selectedViewpointId, setSelectedViewpointId] = useState<string | null>(null);
   const [selectedPageIndex, setSelectedPageIndex] = useState(0);
   const [selectedChapterPages, setSelectedChapterPages] = useState<string[]>([]);
+  const [viewpointCharacterName, setViewpointCharacterName] = useState("");
+  const [viewpointLens, setViewpointLens] =
+    useState<ReaderChapterViewpointLens>("MOMENT");
+  const [viewpointDirectionInput, setViewpointDirectionInput] = useState("");
   const [readerViewport, setReaderViewport] = useState({ width: 0, height: 0 });
   const readerPageBodyRef = useRef<HTMLDivElement | null>(null);
   const readerPageTextRef = useRef<HTMLParagraphElement | null>(null);
+  const previousSelectedChapterIdRef = useRef<string | null>(null);
 
   const sortedBooks = useMemo(
     () => [...books].sort((a, b) => b.addedAt.localeCompare(a.addedAt)),
@@ -361,6 +470,21 @@ export function LibraryReaderClient({
     activeSession?.chapters.find((chapter) => chapter.id === selectedChapterId) ??
     activeSession?.chapters[activeSession.chapters.length - 1] ??
     null;
+  const selectedViewpoint =
+    selectedChapter?.viewpoints.find((viewpoint) => viewpoint.id === selectedViewpointId) ??
+    null;
+  const selectedViewpointCharacterIdentityKey = toCharacterIdentityKey(
+    viewpointCharacterName,
+  );
+  const duplicateViewpointForSelectedCharacter =
+    selectedChapter?.viewpoints.find(
+      (viewpoint) =>
+        toCharacterIdentityKey(viewpoint.characterName) ===
+        selectedViewpointCharacterIdentityKey,
+    ) ?? null;
+  const hasDuplicateViewpointForSelectedCharacter = Boolean(
+    selectedViewpointCharacterIdentityKey && duplicateViewpointForSelectedCharacter,
+  );
   const selectedChapterIndex = selectedChapter
     ? activeSession?.chapters.findIndex((chapter) => chapter.id === selectedChapter.id) ?? -1
     : -1;
@@ -381,6 +505,7 @@ export function LibraryReaderClient({
       isLatestChapterSelected &&
       isAtEndOfChapter &&
       !isGeneratingChapter &&
+      !isGeneratingViewpoint &&
       !isLoadingSession,
   );
   const activeSessionId = activeSession?.session.id ?? null;
@@ -388,6 +513,7 @@ export function LibraryReaderClient({
   useEffect(() => {
     if (!activeSession) {
       setSelectedChapterId(null);
+      setSelectedViewpointId(null);
       setSelectedPageIndex(0);
       return;
     }
@@ -400,9 +526,32 @@ export function LibraryReaderClient({
       const newestChapterId =
         activeSession.chapters[activeSession.chapters.length - 1]?.id ?? null;
       setSelectedChapterId(newestChapterId);
+      setSelectedViewpointId(null);
       setSelectedPageIndex(0);
     }
   }, [activeSession, selectedChapterId]);
+
+  useEffect(() => {
+    const currentChapterId = selectedChapter?.id ?? null;
+
+    if (previousSelectedChapterIdRef.current === currentChapterId) {
+      return;
+    }
+
+    previousSelectedChapterIdRef.current = currentChapterId;
+
+    if (!selectedChapter) {
+      setSelectedViewpointId(null);
+      setViewpointCharacterName("");
+      setViewpointDirectionInput("");
+      return;
+    }
+
+    setSelectedViewpointId(null);
+    setViewpointCharacterName(selectedChapter.characterCandidates[0] ?? "");
+    setViewpointDirectionInput("");
+    setViewpointLens("MOMENT");
+  }, [selectedChapter]);
 
   useEffect(() => {
     if (selectedChapterPages.length === 0 && selectedPageIndex !== 0) {
@@ -416,6 +565,10 @@ export function LibraryReaderClient({
       setSelectedPageIndex(maxPageIndex);
     }
   }, [selectedChapterPages, selectedPageIndex]);
+
+  useEffect(() => {
+    setSelectedPageIndex(0);
+  }, [selectedChapterId]);
 
   useEffect(() => {
     if (!activeSession) {
@@ -678,8 +831,15 @@ export function LibraryReaderClient({
       setSelectedChapterId(
         readingSession.chapters[readingSession.chapters.length - 1]?.id ?? null,
       );
+      setSelectedViewpointId(null);
       setSelectedPageIndex(0);
       setDirectionInput("");
+      setViewpointDirectionInput("");
+      setViewpointLens("MOMENT");
+      setViewpointCharacterName(
+        readingSession.chapters[readingSession.chapters.length - 1]?.characterCandidates[0] ??
+          "",
+      );
 
       if (payload.chapter) {
         setMessage({
@@ -725,8 +885,15 @@ export function LibraryReaderClient({
       setSelectedChapterId(
         payload.session.chapters[payload.session.chapters.length - 1]?.id ?? null,
       );
+      setSelectedViewpointId(null);
       setSelectedPageIndex(0);
       setDirectionInput("");
+      setViewpointDirectionInput("");
+      setViewpointLens("MOMENT");
+      setViewpointCharacterName(
+        payload.session.chapters[payload.session.chapters.length - 1]?.characterCandidates[0] ??
+          "",
+      );
     } catch (error) {
       setMessage({
         type: "error",
@@ -800,6 +967,7 @@ export function LibraryReaderClient({
         };
       });
       setSelectedChapterId(chapter.id);
+      setSelectedViewpointId(null);
       setSelectedPageIndex(0);
 
       setSessions((current) =>
@@ -841,6 +1009,120 @@ export function LibraryReaderClient({
     }
   }
 
+  async function handleGenerateViewpoint(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    if (!activeSession || !selectedChapter) {
+      return;
+    }
+
+    const characterName = viewpointCharacterName.trim();
+
+    if (!characterName) {
+      setMessage({
+        type: "error",
+        text: "Choose or enter a character name before generating a viewpoint.",
+      });
+      return;
+    }
+
+    const requestedCharacterKey = toCharacterIdentityKey(characterName);
+    const existingViewpoint = selectedChapter.viewpoints.find(
+      (viewpoint) =>
+        toCharacterIdentityKey(viewpoint.characterName) === requestedCharacterKey,
+    );
+
+    if (existingViewpoint) {
+      setMessage({
+        type: "error",
+        text: `A viewpoint for ${existingViewpoint.characterName} already exists in this chapter. Choose a different character.`,
+      });
+      return;
+    }
+
+    setIsGeneratingViewpoint(true);
+    setMessage(null);
+
+    try {
+      const response = await fetch(
+        `/api/reader/sessions/${activeSession.session.id}/chapters/${selectedChapter.id}/viewpoints`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            characterName,
+            lens: viewpointLens,
+            directionInput: viewpointDirectionInput.trim() || undefined,
+          }),
+        },
+      );
+
+      const payload = (await response.json().catch(() => null)) as
+        | {
+            viewpoint?: ReaderChapterViewpoint;
+            sessionUpdatedAt?: string;
+            error?: string;
+          }
+        | null;
+
+      if (!response.ok || !payload?.viewpoint || !payload.sessionUpdatedAt) {
+        throw new Error(payload?.error ?? "Could not generate chapter viewpoint.");
+      }
+
+      const { viewpoint, sessionUpdatedAt } = payload;
+
+      setActiveSession((current) => {
+        if (!current) {
+          return current;
+        }
+
+        return {
+          ...current,
+          session: {
+            ...current.session,
+            updatedAt: sessionUpdatedAt,
+          },
+          chapters: current.chapters.map((chapter) => {
+            if (chapter.id !== selectedChapter.id) {
+              return chapter;
+            }
+
+            return {
+              ...chapter,
+              characterCandidates: chapter.characterCandidates.some(
+                (name) => name.toLowerCase() === viewpoint.characterName.toLowerCase(),
+              )
+                ? chapter.characterCandidates
+                : [viewpoint.characterName, ...chapter.characterCandidates].slice(0, 10),
+              viewpoints: [...chapter.viewpoints, viewpoint],
+            };
+          }),
+        };
+      });
+      setSessions((current) =>
+        updateSessionTimestamp(current, activeSession.session.id, sessionUpdatedAt),
+      );
+      setSelectedViewpointId(viewpoint.id);
+      setViewpointDirectionInput("");
+      setMessage({
+        type: "success",
+        text: `${viewpoint.characterName}'s ${describeViewpointLens(viewpoint.lens)} viewpoint is ready.`,
+      });
+    } catch (error) {
+      setMessage({
+        type: "error",
+        text:
+          error instanceof Error
+            ? error.message
+            : "Could not generate chapter viewpoint.",
+      });
+    } finally {
+      setIsGeneratingViewpoint(false);
+    }
+  }
+
   if (activeSession) {
     return (
       <main className="space-y-6">
@@ -860,7 +1142,9 @@ export function LibraryReaderClient({
               onClick={() => {
                 setActiveSession(null);
                 setSelectedChapterId(null);
+                setSelectedViewpointId(null);
                 setSelectedPageIndex(0);
+                setViewpointDirectionInput("");
               }}
               className="rounded-full border border-[var(--parchment-border)] px-4 py-2 text-sm font-semibold text-[var(--ink)] transition hover:bg-[var(--parchment-soft)]"
             >
@@ -905,6 +1189,7 @@ export function LibraryReaderClient({
                       type="button"
                       onClick={() => {
                         setSelectedChapterId(chapter.id);
+                        setSelectedViewpointId(null);
                         setSelectedPageIndex(0);
                       }}
                       className={`w-full rounded-lg border px-3 py-2 text-left transition ${
@@ -917,6 +1202,12 @@ export function LibraryReaderClient({
                         Chapter {chapter.chapterNumber}
                       </p>
                       <p className="mt-1 text-sm font-semibold leading-tight">{chapter.title}</p>
+                      {chapter.viewpoints.length > 0 ? (
+                        <p className="mt-1 text-[11px] text-[var(--ink-muted)]">
+                          {chapter.viewpoints.length} viewpoint
+                          {chapter.viewpoints.length === 1 ? "" : "s"}
+                        </p>
+                      ) : null}
                     </button>
                   );
                 })
@@ -993,6 +1284,7 @@ export function LibraryReaderClient({
 
                         const previousChapter = activeSession.chapters[selectedChapterIndex - 1];
                         setSelectedChapterId(previousChapter.id);
+                        setSelectedViewpointId(null);
                         setSelectedPageIndex(0);
                       }}
                       className="rounded-full border border-[var(--parchment-border)] px-3 py-1 text-xs font-semibold text-[var(--ink)] transition hover:bg-white/65 disabled:cursor-not-allowed disabled:opacity-60"
@@ -1024,6 +1316,7 @@ export function LibraryReaderClient({
 
                         const nextChapter = activeSession.chapters[selectedChapterIndex + 1];
                         setSelectedChapterId(nextChapter.id);
+                        setSelectedViewpointId(null);
                         setSelectedPageIndex(0);
                       }}
                       className="rounded-full border border-[var(--parchment-border)] px-3 py-1 text-xs font-semibold text-[var(--ink)] transition hover:bg-white/65 disabled:cursor-not-allowed disabled:opacity-60"
@@ -1077,7 +1370,7 @@ export function LibraryReaderClient({
             placeholder="Type your own suggestion for the next chapter..."
             className="parchment-input min-h-[96px] w-full rounded-lg px-3 py-2 text-sm outline-none"
             maxLength={2500}
-            disabled={isGeneratingChapter || isLoadingSession}
+            disabled={isGeneratingChapter || isLoadingSession || isGeneratingViewpoint}
           />
 
           <button
@@ -1087,6 +1380,8 @@ export function LibraryReaderClient({
           >
             {isGeneratingChapter
               ? "Generating Next Chapter..."
+              : isGeneratingViewpoint
+                ? "Generating Viewpoint..."
               : isLoadingSession
                 ? "Loading..."
                 : !canGenerateNextChapter
@@ -1094,6 +1389,182 @@ export function LibraryReaderClient({
                   : "Generate Next Chapter"}
           </button>
         </form>
+
+        {selectedChapter ? (
+          <section className="space-y-4 rounded-lg border border-[var(--parchment-border)] bg-[var(--parchment-soft)] px-4 py-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="text-sm font-semibold">Character Viewpoints</p>
+              <p className="text-xs text-[var(--ink-muted)]">
+                Alternate perspectives live here. Your main chapter reader above stays unchanged.
+              </p>
+            </div>
+
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setSelectedViewpointId(null);
+                }}
+                className={`rounded-full border px-3 py-1 text-xs font-semibold transition ${
+                  !selectedViewpoint
+                    ? "border-[var(--focus-border)] bg-white/75 text-[var(--ink)]"
+                    : "border-[var(--parchment-border)] text-[var(--ink)] hover:bg-white/65"
+                }`}
+              >
+                No Viewpoint Selected
+              </button>
+              {selectedChapter.viewpoints.map((viewpoint) => (
+                <button
+                  key={viewpoint.id}
+                  type="button"
+                  onClick={() => {
+                    setSelectedViewpointId(viewpoint.id);
+                  }}
+                  className={`rounded-full border px-3 py-1 text-xs font-semibold transition ${
+                    selectedViewpoint?.id === viewpoint.id
+                      ? "border-[var(--focus-border)] bg-white/75 text-[var(--ink)]"
+                      : "border-[var(--parchment-border)] text-[var(--ink)] hover:bg-white/65"
+                  }`}
+                >
+                  {viewpoint.characterName} ({describeViewpointLens(viewpoint.lens)})
+                </button>
+              ))}
+            </div>
+
+            <form className="space-y-3" onSubmit={handleGenerateViewpoint}>
+              {selectedChapter.characterCandidates.length > 0 ? (
+                <div className="flex flex-wrap gap-2">
+                  {selectedChapter.characterCandidates.map((name) => (
+                    (() => {
+                      const candidateKey = toCharacterIdentityKey(name);
+                      const hasExistingViewpoint = selectedChapter.viewpoints.some(
+                        (viewpoint) =>
+                          toCharacterIdentityKey(viewpoint.characterName) === candidateKey,
+                      );
+
+                      return (
+                        <button
+                          key={`${selectedChapter.id}-${name}`}
+                          type="button"
+                          onClick={() => setViewpointCharacterName(name)}
+                          disabled={hasExistingViewpoint}
+                          className={`rounded-full border px-2.5 py-1 text-[11px] font-semibold transition ${
+                            viewpointCharacterName.trim().toLowerCase() === name.toLowerCase()
+                              ? "border-[var(--focus-border)] bg-white/75 text-[var(--ink)]"
+                              : "border-[var(--parchment-border)] text-[var(--ink-muted)] hover:bg-white/65"
+                          } ${hasExistingViewpoint ? "cursor-not-allowed opacity-60" : ""}`}
+                          title={
+                            hasExistingViewpoint
+                              ? "Viewpoint already exists for this character in this chapter."
+                              : undefined
+                          }
+                        >
+                          {name}
+                          {hasExistingViewpoint ? " (already used)" : ""}
+                        </button>
+                      );
+                    })()
+                  ))}
+                </div>
+              ) : null}
+
+              <div className="grid gap-2 sm:grid-cols-2">
+                <label className="space-y-1">
+                  <span className="text-xs font-semibold text-[var(--ink-muted)] uppercase">
+                    Character Name
+                  </span>
+                  <input
+                    value={viewpointCharacterName}
+                    onChange={(event) => setViewpointCharacterName(event.target.value)}
+                    placeholder="Choose a character from this chapter..."
+                    maxLength={80}
+                    className="parchment-input w-full rounded-lg px-3 py-2 text-sm outline-none"
+                    disabled={isGeneratingViewpoint || isLoadingSession || isGeneratingChapter}
+                  />
+                </label>
+
+                <label className="space-y-1">
+                  <span className="text-xs font-semibold text-[var(--ink-muted)] uppercase">
+                    Viewpoint Length
+                  </span>
+                  <select
+                    value={viewpointLens}
+                    onChange={(event) =>
+                      setViewpointLens(event.target.value as ReaderChapterViewpointLens)
+                    }
+                    className="parchment-input w-full rounded-lg px-3 py-2 text-sm outline-none"
+                    disabled={isGeneratingViewpoint || isLoadingSession || isGeneratingChapter}
+                  >
+                    {VIEWPOINT_LENS_OPTIONS.map((option) => (
+                      <option key={option.lens} value={option.lens}>
+                        {option.label} - {option.description}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+
+              <label className="space-y-1">
+                <span className="text-xs font-semibold text-[var(--ink-muted)] uppercase">
+                  Optional Direction
+                </span>
+                <textarea
+                  value={viewpointDirectionInput}
+                  onChange={(event) => setViewpointDirectionInput(event.target.value)}
+                  placeholder="Optional: ask for tone, focus, or hidden motives to explore..."
+                  className="parchment-input min-h-[90px] w-full rounded-lg px-3 py-2 text-sm outline-none"
+                  maxLength={MAX_VIEWPOINT_DIRECTION_INPUT_LENGTH}
+                  disabled={isGeneratingViewpoint || isLoadingSession || isGeneratingChapter}
+                />
+              </label>
+
+              {hasDuplicateViewpointForSelectedCharacter ? (
+                <p className="text-xs text-rose-800">
+                  A viewpoint for {duplicateViewpointForSelectedCharacter?.characterName} already
+                  exists in this chapter. Pick another character.
+                </p>
+              ) : null}
+
+              <button
+                type="submit"
+                disabled={
+                  !selectedChapter ||
+                  !viewpointCharacterName.trim() ||
+                  hasDuplicateViewpointForSelectedCharacter ||
+                  isGeneratingViewpoint ||
+                  isLoadingSession ||
+                  isGeneratingChapter
+                }
+                className="rounded-full border border-[var(--parchment-border)] px-4 py-2 text-sm font-semibold text-[var(--ink)] transition hover:bg-white/65 disabled:cursor-not-allowed disabled:opacity-70"
+              >
+                {isGeneratingViewpoint
+                  ? "Generating Viewpoint..."
+                  : "Generate Character Viewpoint"}
+              </button>
+            </form>
+
+            {selectedViewpoint ? (
+              <article className="rounded-lg border border-[var(--parchment-border)] bg-white/45 px-4 py-4">
+                <p className="text-xs tracking-[0.12em] text-[var(--ink-muted)] uppercase">
+                  Chapter {selectedViewpoint.chapterNumber} | {describeViewpointLens(selectedViewpoint.lens)}
+                </p>
+                <h4 className="mt-1 text-lg font-semibold">{selectedViewpoint.title}</h4>
+                <p className="mt-1 text-xs text-[var(--ink-muted)]">
+                  {selectedViewpoint.characterName} viewpoint | Generated {formatDate(selectedViewpoint.createdAt)}
+                </p>
+                <div className="mt-3 max-h-[26rem] overflow-y-auto pr-1">
+                  <p className="whitespace-pre-wrap text-sm leading-7 text-[var(--ink)]">
+                    {selectedViewpoint.content}
+                  </p>
+                </div>
+              </article>
+            ) : (
+              <p className="rounded-lg border border-[var(--parchment-border)] bg-white/45 px-3 py-3 text-sm text-[var(--ink-muted)]">
+                Select a saved viewpoint above, or generate one for this chapter.
+              </p>
+            )}
+          </section>
+        ) : null}
       </main>
     );
   }

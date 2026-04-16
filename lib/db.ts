@@ -159,6 +159,18 @@ async function initializeSchema() {
       UNIQUE(session_id, turn_index)
     );
 
+    CREATE TABLE IF NOT EXISTS chapter_viewpoints (
+      id TEXT PRIMARY KEY,
+      chapter_id TEXT NOT NULL REFERENCES story_turns(id) ON DELETE CASCADE,
+      character_name TEXT NOT NULL,
+      lens TEXT NOT NULL DEFAULT 'MOMENT' CHECK (lens IN ('MOMENT', 'THREAD', 'SPINOFF')),
+      direction_input TEXT,
+      viewpoint_title TEXT,
+      ai_response TEXT NOT NULL,
+      model TEXT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL
+    );
+
     ALTER TABLE story_turns
       ADD COLUMN IF NOT EXISTS chapter_title TEXT;
     ALTER TABLE story_turns
@@ -194,6 +206,8 @@ async function initializeSchema() {
     CREATE UNIQUE INDEX IF NOT EXISTS library_books_user_world_uidx ON library_books(user_id, world_id);
     CREATE INDEX IF NOT EXISTS library_books_user_created_idx ON library_books(user_id, created_at DESC);
     CREATE INDEX IF NOT EXISTS story_turns_session_idx ON story_turns(session_id);
+    CREATE INDEX IF NOT EXISTS chapter_viewpoints_chapter_created_idx ON chapter_viewpoints(chapter_id, created_at);
+    CREATE INDEX IF NOT EXISTS chapter_viewpoints_character_idx ON chapter_viewpoints(character_name);
   `);
 }
 

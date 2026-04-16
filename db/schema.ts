@@ -226,3 +226,31 @@ export const storyTurns = pgTable(
     index("story_turns_session_idx").on(table.sessionId),
   ],
 );
+
+export const chapterViewpoints = pgTable(
+  "chapter_viewpoints",
+  {
+    id: text("id").primaryKey(),
+    chapterId: text("chapter_id")
+      .notNull()
+      .references(() => storyTurns.id, { onDelete: "cascade" }),
+    characterName: text("character_name").notNull(),
+    lens: text("lens", {
+      enum: ["MOMENT", "THREAD", "SPINOFF"],
+    })
+      .notNull()
+      .default("MOMENT"),
+    directionInput: text("direction_input"),
+    viewpointTitle: text("viewpoint_title"),
+    aiResponse: text("ai_response").notNull(),
+    model: text("model").notNull(),
+    createdAt: timestamp("created_at", {
+      withTimezone: true,
+      mode: "date",
+    }).notNull(),
+  },
+  (table) => [
+    index("chapter_viewpoints_chapter_created_idx").on(table.chapterId, table.createdAt),
+    index("chapter_viewpoints_character_idx").on(table.characterName),
+  ],
+);

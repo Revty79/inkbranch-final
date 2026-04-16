@@ -61,8 +61,25 @@ export type ReaderChapter = {
   chapterNumber: number;
   title: string;
   content: string;
+  characterCandidates: string[];
+  viewpoints: ReaderChapterViewpoint[];
   directionInput: string;
   choiceOptions: string[];
+  model: string;
+  createdAt: string;
+};
+
+export type ReaderChapterViewpointLens = "MOMENT" | "THREAD" | "SPINOFF";
+
+export type ReaderChapterViewpoint = {
+  id: string;
+  chapterId: string;
+  chapterNumber: number;
+  characterName: string;
+  lens: ReaderChapterViewpointLens;
+  title: string;
+  content: string;
+  directionInput: string | null;
   model: string;
   createdAt: string;
 };
@@ -174,6 +191,19 @@ type ChapterRow = {
   created_at: Date | string;
 };
 
+type ViewpointRow = {
+  id: string;
+  chapter_id: string;
+  chapter_number: number | string;
+  character_name: string;
+  lens: ReaderChapterViewpointLens | string;
+  direction_input: string | null;
+  viewpoint_title: string | null;
+  ai_response: string;
+  model: string;
+  created_at: Date | string;
+};
+
 type PriorChapterTextRow = {
   ai_response: string;
 };
@@ -182,6 +212,12 @@ type ParsedChapterOutput = {
   chapterTitle: string;
   chapterBody: string;
   choiceOptions: string[];
+  didParseJson: boolean;
+};
+
+type ParsedViewpointOutput = {
+  viewpointTitle: string;
+  viewpointBody: string;
   didParseJson: boolean;
 };
 
@@ -201,7 +237,22 @@ type ChapterGenerationProfile = {
   temperature: number;
 };
 
+type ViewpointGenerationProfile = {
+  targetWordsMin: number;
+  targetWordsMax: number;
+  minAcceptedWords: number;
+  maxOutputTokens: number;
+  temperature: number;
+  lensLabel: string;
+};
+
 const MAX_DIRECTION_LENGTH = 2500;
+const MAX_VIEWPOINT_CHARACTER_NAME_LENGTH = 80;
+const MAX_VIEWPOINT_DIRECTION_LENGTH = 1600;
+const CHAPTER_CONTINUITY_REVIEW_ENABLED =
+  (process.env.READER_CHAPTER_CONTINUITY_REVIEW?.trim().toLowerCase() ?? "true") !==
+  "false";
+const CHAPTER_CONTINUITY_ENDING_CONTEXT_CHARS = 2200;
 const DEFAULT_CHAPTER_GENERATION_PROFILE = "BALANCED";
 const CHAPTER_GENERATION_PROFILES: Record<string, ChapterGenerationProfile> = {
   FAST: {
@@ -242,6 +293,37 @@ const MAX_READING_ACTIVITY_SECONDS_PER_UPDATE = 300;
 const OVERUSED_NAME_SCAN_CHAPTER_LIMIT = 36;
 const OVERUSED_NAME_MIN_CHAPTERS = 3;
 const OVERUSED_NAME_MAX_RESULTS = 8;
+const MAX_CHARACTER_CANDIDATES_PER_CHAPTER = 10;
+const VIEWPOINT_GENERATION_ATTEMPTS = 3;
+const VIEWPOINT_GENERATION_PROFILES: Record<
+  ReaderChapterViewpointLens,
+  ViewpointGenerationProfile
+> = {
+  MOMENT: {
+    targetWordsMin: 320,
+    targetWordsMax: 700,
+    minAcceptedWords: 220,
+    maxOutputTokens: 1800,
+    temperature: 0.85,
+    lensLabel: "short vignette",
+  },
+  THREAD: {
+    targetWordsMin: 900,
+    targetWordsMax: 1700,
+    minAcceptedWords: 700,
+    maxOutputTokens: 3600,
+    temperature: 0.87,
+    lensLabel: "extended side-story thread",
+  },
+  SPINOFF: {
+    targetWordsMin: 1700,
+    targetWordsMax: 2800,
+    minAcceptedWords: 1350,
+    maxOutputTokens: 6000,
+    temperature: 0.9,
+    lensLabel: "spinoff seed chapter",
+  },
+};
 const CHOICE_META_ARTIFACT_PATTERNS = [
   /\bopen chapter\s*\d+\b/i,
   /\bstrong hook\b/i,
@@ -252,10 +334,11 @@ const CHOICE_META_ARTIFACT_PATTERNS = [
 const CHARACTER_ACTION_VERB_PATTERN =
   "(?:said|asked|replied|whispered|murmured|shouted|snapped|sighed|nodded|smiled|frowned|glanced|stared|looked|stepped|walked|ran|turned|leaned|paused|felt|thought|remembered|watched|pulled|pushed|grabbed|reached|hurried|froze|paid|began|started|moved|kept|waited|followed|opened|closed|wrote|read|spoke|listened|noticed)";
 const LIKELY_CHARACTER_NAME_PATTERN = new RegExp(
-  `\\b([A-Z][a-z]{2,})\\s+(?:[A-Z][a-z]{2,}\\s+)?${CHARACTER_ACTION_VERB_PATTERN}\\b`,
+  `\\b([A-Z][a-z]{2,}(?:\\s+[A-Z][a-z]{2,})?)\\s+${CHARACTER_ACTION_VERB_PATTERN}\\b`,
   "g",
 );
-const HONORIFIC_NAME_PATTERN = /\b(?:Mr|Mrs|Ms|Dr)\.\s+([A-Z][a-z]{2,})\b/g;
+const HONORIFIC_NAME_PATTERN =
+  /\b(?:Mr|Mrs|Ms|Dr)\.\s+([A-Z][a-z]{2,}(?:\s+[A-Z][a-z]{2,})?)\b/g;
 const NON_CHARACTER_NAME_TOKENS = new Set([
   "chapter",
   "prologue",
@@ -285,6 +368,96 @@ const NON_CHARACTER_NAME_TOKENS = new Set([
   "south",
   "east",
   "west",
+  "the",
+  "then",
+  "there",
+  "here",
+]);
+const NON_CHARACTER_PRONOUN_TOKENS = new Set([
+  "he",
+  "she",
+  "him",
+  "her",
+  "his",
+  "hers",
+  "himself",
+  "herself",
+  "they",
+  "them",
+  "their",
+  "theirs",
+  "themselves",
+  "we",
+  "us",
+  "our",
+  "ours",
+  "ourselves",
+  "you",
+  "your",
+  "yours",
+  "yourself",
+  "yourselves",
+  "i",
+  "me",
+  "my",
+  "mine",
+  "myself",
+]);
+const NON_CHARACTER_GENERIC_LABEL_TOKENS = new Set([
+  "lady",
+  "lord",
+  "sir",
+  "madam",
+  "dame",
+  "man",
+  "woman",
+  "boy",
+  "girl",
+  "child",
+  "stranger",
+  "guard",
+  "soldier",
+  "officer",
+  "captain",
+  "commander",
+  "merchant",
+  "servant",
+  "driver",
+  "bartender",
+  "waiter",
+  "waitress",
+  "narrator",
+  "mother",
+  "father",
+  "sister",
+  "brother",
+]);
+const CHARACTER_TITLE_PREFIX_TOKENS = new Set([
+  "lady",
+  "lord",
+  "sir",
+  "madam",
+  "dame",
+  "captain",
+  "commander",
+  "master",
+  "mistress",
+  "queen",
+  "king",
+  "prince",
+  "princess",
+  "duke",
+  "duchess",
+  "baron",
+  "baroness",
+  "count",
+  "countess",
+]);
+const CHARACTER_HONORIFIC_PREFIX_TOKENS = new Set([
+  "mr",
+  "mrs",
+  "ms",
+  "dr",
 ]);
 
 function toNumber(value: number | string | null | undefined) {
@@ -306,6 +479,65 @@ function toNullableNumber(value: number | string | null | undefined) {
 
   const parsed = toNumber(value);
   return Number.isFinite(parsed) ? parsed : null;
+}
+
+function normalizeOptionalText(input: string | null | undefined) {
+  if (typeof input !== "string") {
+    return null;
+  }
+
+  const normalized = input.replace(/\s+/g, " ").trim();
+  return normalized ? normalized : null;
+}
+
+function normalizeViewpointCharacterName(input: string) {
+  return input
+    .replace(/\r\n/g, " ")
+    .replace(/\r/g, " ")
+    .replace(/\n/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, MAX_VIEWPOINT_CHARACTER_NAME_LENGTH);
+}
+
+function toCharacterIdentityKey(name: string) {
+  const normalized = normalizeViewpointCharacterName(name)
+    .replace(/\./g, "")
+    .toLowerCase();
+
+  if (!normalized) {
+    return "";
+  }
+
+  const parts = normalized.split(/\s+/).filter(Boolean);
+
+  if (parts.length === 0) {
+    return "";
+  }
+
+  if (
+    parts.length >= 2 &&
+    (CHARACTER_TITLE_PREFIX_TOKENS.has(parts[0]) ||
+      CHARACTER_HONORIFIC_PREFIX_TOKENS.has(parts[0]))
+  ) {
+    return parts.slice(1).join(" ");
+  }
+
+  return parts.join(" ");
+}
+
+function toViewpointLens(input: string | null | undefined): ReaderChapterViewpointLens {
+  const normalized = input?.trim().toUpperCase();
+
+  if (
+    normalized === "MOMENT" ||
+    normalized === "THREAD" ||
+    normalized === "SPINOFF"
+  ) {
+    return normalized;
+  }
+
+  return "MOMENT";
 }
 
 function safeParseChoiceOptions(input: string | null | undefined): string[] {
@@ -402,18 +634,70 @@ function summarizeForPrompt(input: string, maxChars: number) {
   return `${head} ... ${tail}`;
 }
 
-function isLikelyCharacterName(name: string) {
-  if (!name) {
+function isLikelyCharacterToken(token: string) {
+  if (!token) {
     return false;
   }
 
-  const trimmed = name.trim();
+  const trimmed = token.trim();
 
   if (!/^[A-Z][a-z]{2,}$/.test(trimmed)) {
     return false;
   }
 
-  return !NON_CHARACTER_NAME_TOKENS.has(trimmed.toLowerCase());
+  const normalized = trimmed.toLowerCase();
+
+  if (NON_CHARACTER_NAME_TOKENS.has(normalized)) {
+    return false;
+  }
+
+  if (NON_CHARACTER_PRONOUN_TOKENS.has(normalized)) {
+    return false;
+  }
+
+  return true;
+}
+
+function isLikelyCharacterName(name: string) {
+  if (!name) {
+    return false;
+  }
+
+  const normalizedName = normalizeViewpointCharacterName(name);
+
+  if (!normalizedName) {
+    return false;
+  }
+
+  const parts = normalizedName.split(/\s+/).filter(Boolean);
+
+  if (parts.length === 0 || parts.length > 2) {
+    return false;
+  }
+
+  if (parts.length === 1) {
+    const single = parts[0];
+
+    if (!isLikelyCharacterToken(single)) {
+      return false;
+    }
+
+    return !NON_CHARACTER_GENERIC_LABEL_TOKENS.has(single.toLowerCase());
+  }
+
+  const [first, second] = parts;
+
+  if (!isLikelyCharacterToken(second)) {
+    return false;
+  }
+
+  const firstLower = first.toLowerCase();
+
+  if (CHARACTER_TITLE_PREFIX_TOKENS.has(firstLower)) {
+    return true;
+  }
+
+  return isLikelyCharacterToken(first);
 }
 
 function extractLikelyCharacterNames(input: string) {
@@ -429,7 +713,7 @@ function extractLikelyCharacterNames(input: string) {
   LIKELY_CHARACTER_NAME_PATTERN.lastIndex = 0;
 
   while ((match = LIKELY_CHARACTER_NAME_PATTERN.exec(normalized)) !== null) {
-    const candidate = match[1]?.trim();
+    const candidate = normalizeViewpointCharacterName(match[1] ?? "");
 
     if (candidate && isLikelyCharacterName(candidate)) {
       names.push(candidate);
@@ -439,7 +723,7 @@ function extractLikelyCharacterNames(input: string) {
   HONORIFIC_NAME_PATTERN.lastIndex = 0;
 
   while ((match = HONORIFIC_NAME_PATTERN.exec(normalized)) !== null) {
-    const candidate = match[1]?.trim();
+    const candidate = normalizeViewpointCharacterName(match[1] ?? "");
 
     if (candidate && isLikelyCharacterName(candidate)) {
       names.push(candidate);
@@ -447,6 +731,43 @@ function extractLikelyCharacterNames(input: string) {
   }
 
   return names;
+}
+
+function mergeDistinctCharacterNames(...groups: Array<readonly string[]>) {
+  const merged: string[] = [];
+  const seen = new Set<string>();
+
+  for (const group of groups) {
+    for (const rawName of group) {
+      const normalized = normalizeViewpointCharacterName(rawName);
+
+      if (!normalized) {
+        continue;
+      }
+
+      const key = normalized.toLowerCase();
+
+      if (seen.has(key)) {
+        continue;
+      }
+
+      seen.add(key);
+      merged.push(normalized);
+
+      if (merged.length >= MAX_CHARACTER_CANDIDATES_PER_CHAPTER) {
+        return merged;
+      }
+    }
+  }
+
+  return merged;
+}
+
+function listCharacterCandidatesFromChapter(chapterTitle: string, chapterBody: string) {
+  const fromBody = extractLikelyCharacterNames(chapterBody);
+  const fromTitle = extractLikelyCharacterNames(chapterTitle);
+
+  return mergeDistinctCharacterNames(fromBody, fromTitle);
 }
 
 function findOverusedCharacterNamesFromHistory(chapters: string[]) {
@@ -911,6 +1232,35 @@ function toLibraryBook(row: LibraryBookRow): LibraryBook {
   };
 }
 
+function toReaderChapterViewpoint(row: ViewpointRow): ReaderChapterViewpoint {
+  return {
+    id: row.id,
+    chapterId: row.chapter_id,
+    chapterNumber: toNumber(row.chapter_number),
+    characterName: normalizeViewpointCharacterName(row.character_name) || "Unknown Character",
+    lens: toViewpointLens(row.lens),
+    title: row.viewpoint_title?.trim() || "Untitled Viewpoint",
+    content: normalizeChapterBody(row.ai_response),
+    directionInput: normalizeOptionalText(row.direction_input),
+    model: row.model,
+    createdAt: new Date(row.created_at).toISOString(),
+  };
+}
+
+function getChapterEndingContext(input: string, maxChars: number) {
+  const normalized = normalizeChapterBody(input);
+
+  if (!normalized) {
+    return "(empty previous chapter)";
+  }
+
+  if (normalized.length <= maxChars) {
+    return normalized;
+  }
+
+  return normalized.slice(-maxChars).trimStart();
+}
+
 function buildChapterPrompt(
   detail: ReaderSessionDetail,
   chapterNumber: number,
@@ -984,6 +1334,11 @@ function buildChapterPrompt(
       ? `- Avoid using these overused names as the chapter's central POV/protagonist unless canon explicitly requires it: ${overusedCharacterNames.join(", ")}`
       : null,
     "",
+    "Continuity contract:",
+    "- Treat the previous chapter ending as the immediate current reality for this chapter's opening.",
+    "- Do not silently change place, time, weather, character positions, injuries, or objects in-hand.",
+    "- If a transition is needed, explicitly narrate the move/time change before describing the new state.",
+    "",
     `Target chapter number: ${chapterNumber}`,
     detail.libraryBook.chapterCap
       ? `You are writing chapter ${chapterNumber} of ${detail.libraryBook.chapterCap}.`
@@ -1038,6 +1393,11 @@ function buildChapterExpansionPrompt(options: {
       ? `- Avoid promoting these overused names into the central lead role unless canon explicitly requires it: ${options.overusedCharacterNames.join(", ")}`
       : null,
     "",
+    "Continuity contract:",
+    "- Keep the opening of this chapter anchored to the exact end state of the prior chapter unless an explicit transition is written on-page.",
+    "- Do not silently change location, time of day, weather, injuries, objects in-hand, or character positions.",
+    "- If scene/time/location changes, include a clear transition sentence before the new setting details.",
+    "",
     "Requirements:",
     `- Expand chapterBody to ${options.profile.targetWordsMin} to ${options.profile.targetWordsMax} words.`,
     "- Ensure the expanded chapter feels like a full novel chapter, not a short scene.",
@@ -1050,6 +1410,80 @@ function buildChapterExpansionPrompt(options: {
     "- Choices should be roughly 16-110 words, specific, and actionable (no vague filler).",
     "- Do not wrap output in markdown fences or HTML tags such as <code>.",
   ].join("\n");
+}
+
+function buildChapterContinuityRevisionPrompt(options: {
+  previousChapter: ReaderChapter;
+  chapterNumber: number;
+  directionInput: string;
+  chapterTitle: string;
+  chapterBody: string;
+  profile: ChapterGenerationProfile;
+}) {
+  return [
+    "You are the InkBranch continuity editor.",
+    "Your task is to enforce strict canon continuity between consecutive chapters.",
+    "Return valid JSON only, no markdown fences.",
+    "JSON schema:",
+    '{"chapterTitle":"string","chapterBody":"string"}',
+    "",
+    `Previous chapter number: ${options.previousChapter.chapterNumber}`,
+    `Previous chapter title: ${options.previousChapter.title}`,
+    "Previous chapter ending context:",
+    getChapterEndingContext(
+      options.previousChapter.content,
+      CHAPTER_CONTINUITY_ENDING_CONTEXT_CHARS,
+    ),
+    "",
+    `Candidate chapter number: ${options.chapterNumber}`,
+    `Candidate chapter title: ${options.chapterTitle}`,
+    `Reader direction: ${options.directionInput}`,
+    "Candidate chapter body:",
+    options.chapterBody,
+    "",
+    "Continuity rules (must enforce):",
+    "- The new chapter must begin from the same immediate reality as the previous chapter ending.",
+    "- Do not silently move the story to a different location, time, or weather.",
+    "- Do not silently reset injuries, object positions, clothing state, or unresolved actions.",
+    "- If a location/time shift is needed, add explicit transition text that explains when/how the change happened.",
+    "- Preserve established canon facts and character truths.",
+    "- Keep the chapter's core plot intent and momentum.",
+    "",
+    "Output requirements:",
+    `- Keep chapterBody in the same quality range and roughly ${options.profile.targetWordsMin}-${options.profile.targetWordsMax} words.`,
+    "- Return only the corrected chapterTitle and chapterBody in JSON.",
+  ].join("\n");
+}
+
+function parseChapterContinuityRevisionOutput(
+  raw: string,
+  fallbackTitle: string,
+  fallbackBody: string,
+) {
+  const parsed = tryParseJsonObject(raw);
+
+  if (!parsed) {
+    return {
+      chapterTitle: fallbackTitle,
+      chapterBody: fallbackBody,
+      didParseJson: false,
+    };
+  }
+
+  const chapterTitle =
+    typeof parsed.chapterTitle === "string" && parsed.chapterTitle.trim()
+      ? normalizeChapterBody(parsed.chapterTitle).slice(0, 180)
+      : fallbackTitle;
+  const chapterBody =
+    typeof parsed.chapterBody === "string" && parsed.chapterBody.trim()
+      ? normalizeChapterBody(parsed.chapterBody)
+      : fallbackBody;
+
+  return {
+    chapterTitle: chapterTitle || fallbackTitle,
+    chapterBody: chapterBody || fallbackBody,
+    didParseJson: true,
+  };
 }
 
 function parseChapterOutput(
@@ -1110,6 +1544,178 @@ function parseChapterOutput(
     }),
     didParseJson: false,
   } satisfies ParsedChapterOutput;
+}
+
+function tryParseViewpointJsonObject(raw: string) {
+  const cleaned = stripCodeContainer(raw);
+  const candidates = [cleaned];
+  const firstBrace = cleaned.indexOf("{");
+  const lastBrace = cleaned.lastIndexOf("}");
+
+  if (firstBrace >= 0 && lastBrace > firstBrace) {
+    const sliced = cleaned.slice(firstBrace, lastBrace + 1);
+
+    if (sliced !== cleaned) {
+      candidates.push(sliced);
+    }
+  }
+
+  for (const candidate of candidates) {
+    try {
+      const parsed = JSON.parse(candidate) as unknown;
+
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        return parsed as {
+          viewpointTitle?: unknown;
+          viewpointBody?: unknown;
+          chapterTitle?: unknown;
+          chapterBody?: unknown;
+          title?: unknown;
+          content?: unknown;
+        };
+      }
+    } catch {
+      continue;
+    }
+  }
+
+  return null;
+}
+
+function parseViewpointOutput(raw: string, fallbackTitle: string): ParsedViewpointOutput {
+  const parsed = tryParseViewpointJsonObject(raw);
+
+  if (parsed) {
+    const parsedTitleCandidates = [
+      parsed.viewpointTitle,
+      parsed.chapterTitle,
+      parsed.title,
+    ];
+    const parsedBodyCandidates = [
+      parsed.viewpointBody,
+      parsed.chapterBody,
+      parsed.content,
+    ];
+
+    const viewpointTitle = parsedTitleCandidates
+      .find((item): item is string => typeof item === "string" && item.trim().length > 0)
+      ?.trim()
+      .slice(0, 180);
+    const viewpointBody = parsedBodyCandidates
+      .find((item): item is string => typeof item === "string" && item.trim().length > 0);
+
+    if (viewpointBody) {
+      return {
+        viewpointTitle: viewpointTitle || fallbackTitle,
+        viewpointBody: normalizeChapterBody(viewpointBody),
+        didParseJson: true,
+      };
+    }
+  }
+
+  return {
+    viewpointTitle: fallbackTitle,
+    viewpointBody: normalizeChapterBody(stripCodeContainer(raw)),
+    didParseJson: false,
+  };
+}
+
+function buildChapterViewpointPrompt(options: {
+  detail: ReaderSessionDetail;
+  chapter: ReaderChapter;
+  characterName: string;
+  lens: ReaderChapterViewpointLens;
+  directionInput: string | null;
+  profile: ViewpointGenerationProfile;
+}) {
+  return [
+    "You are the InkBranch alternate-viewpoint writer.",
+    "Rewrite the selected chapter from one character's perspective.",
+    "Keep canon alignment with the source chapter.",
+    "You may reveal private motives and hidden observations from that character's POV.",
+    "Return valid JSON only, with no markdown fences.",
+    "",
+    "JSON schema:",
+    '{"viewpointTitle":"string","viewpointBody":"string"}',
+    "",
+    `Book title: ${options.detail.libraryBook.title}`,
+    options.detail.libraryBook.premise
+      ? `Book premise: ${options.detail.libraryBook.premise}`
+      : null,
+    `Source chapter number: ${options.chapter.chapterNumber}`,
+    `Source chapter title: ${options.chapter.title}`,
+    `Target character viewpoint: ${options.characterName}`,
+    `Lens: ${options.lens} (${options.profile.lensLabel})`,
+    options.directionInput
+      ? `Reader viewpoint direction: ${options.directionInput}`
+      : "Reader viewpoint direction: none",
+    "",
+    options.detail.rules.canon.length ? "Canon anchors:" : null,
+    ...(options.detail.rules.canon.length
+      ? options.detail.rules.canon.map((rule) => `- ${rule}`)
+      : []),
+    "",
+    "Source chapter text:",
+    options.chapter.content,
+    "",
+    "Requirements:",
+    `- viewpointBody must be ${options.profile.targetWordsMin} to ${options.profile.targetWordsMax} words.`,
+    "- Use a clear perspective voice rooted in the selected character.",
+    "- Preserve the chapter's major external events and outcomes.",
+    "- Preserve concrete continuity details (location, timing, injuries, props, and unresolved actions).",
+    "- Add insight, emotion, and subtext unavailable in the original narration.",
+    "- Do not introduce canon-breaking twists.",
+    options.lens === "SPINOFF"
+      ? "- End with unresolved momentum that could naturally seed a future standalone story."
+      : "- End with a satisfying emotional beat tied to this chapter's events.",
+    "- Avoid bullet points. Write prose paragraphs.",
+    "- Do not include markdown fences, HTML tags, or commentary outside JSON.",
+  ]
+    .filter((line): line is string => Boolean(line))
+    .join("\n");
+}
+
+function buildChapterViewpointExpansionPrompt(options: {
+  chapter: ReaderChapter;
+  characterName: string;
+  lens: ReaderChapterViewpointLens;
+  directionInput: string | null;
+  profile: ViewpointGenerationProfile;
+  currentTitle: string;
+  currentBody: string;
+}) {
+  return [
+    "Expand and strengthen this alternate viewpoint draft while keeping canon consistency.",
+    "Return valid JSON only, with no markdown fences.",
+    "JSON schema:",
+    '{"viewpointTitle":"string","viewpointBody":"string"}',
+    "",
+    `Source chapter number: ${options.chapter.chapterNumber}`,
+    `Source chapter title: ${options.chapter.title}`,
+    `Target character: ${options.characterName}`,
+    `Lens: ${options.lens} (${options.profile.lensLabel})`,
+    options.directionInput
+      ? `Reader viewpoint direction: ${options.directionInput}`
+      : "Reader viewpoint direction: none",
+    "",
+    `Current viewpoint title: ${options.currentTitle}`,
+    "Current viewpoint body:",
+    options.currentBody,
+    "",
+    "Source chapter text for alignment:",
+    summarizeForPrompt(options.chapter.content, 2600),
+    "",
+    "Requirements:",
+    `- Expand viewpointBody to ${options.profile.targetWordsMin} to ${options.profile.targetWordsMax} words.`,
+    "- Keep major chapter outcomes aligned with the source.",
+    "- Keep concrete continuity details aligned with the source chapter's reality.",
+    "- Deepen interiority and character-specific interpretation.",
+    "- Keep prose quality high and avoid repetitive filler.",
+    options.lens === "SPINOFF"
+      ? "- Leave one strong unresolved thread that could launch a larger spinoff arc."
+      : "- Close with a coherent emotional and narrative beat.",
+    "- Do not include markdown fences, HTML tags, or commentary outside JSON.",
+  ].join("\n");
 }
 
 export async function listLibraryBooks(user: PublicUser): Promise<LibraryBook[]> {
@@ -1467,6 +2073,39 @@ export async function getReaderSessionDetail(
     ),
   ]);
 
+  const chapterIds = chaptersResult.rows.map((chapter) => chapter.id);
+  const viewpointsResult = chapterIds.length
+    ? await db.query<ViewpointRow>(
+        `
+          SELECT
+            viewpoints.id,
+            viewpoints.chapter_id,
+            chapters.turn_index AS chapter_number,
+            viewpoints.character_name,
+            viewpoints.lens,
+            viewpoints.direction_input,
+            viewpoints.viewpoint_title,
+            viewpoints.ai_response,
+            viewpoints.model,
+            viewpoints.created_at
+          FROM chapter_viewpoints AS viewpoints
+          JOIN story_turns AS chapters
+            ON chapters.id = viewpoints.chapter_id
+          WHERE viewpoints.chapter_id = ANY($1::text[])
+          ORDER BY chapters.turn_index ASC, viewpoints.created_at ASC
+        `,
+        [chapterIds],
+      )
+    : { rows: [] as ViewpointRow[] };
+
+  const viewpointsByChapterId = new Map<string, ReaderChapterViewpoint[]>();
+
+  for (const row of viewpointsResult.rows) {
+    const current = viewpointsByChapterId.get(row.chapter_id) ?? [];
+    current.push(toReaderChapterViewpoint(row));
+    viewpointsByChapterId.set(row.chapter_id, current);
+  }
+
   const rules = {
     canon: [] as string[],
     characterTruths: [] as string[],
@@ -1510,12 +2149,22 @@ export async function getReaderSessionDetail(
       },
     );
     const fallbackTitle = parsedOutput.chapterTitle || `Chapter ${chapterNumber}`;
+    const chapterViewpoints = viewpointsByChapterId.get(chapter.id) ?? [];
+    const characterCandidates = mergeDistinctCharacterNames(
+      listCharacterCandidatesFromChapter(
+        chapter.chapter_title?.trim() || fallbackTitle,
+        parsedOutput.chapterBody,
+      ),
+      chapterViewpoints.map((viewpoint) => viewpoint.characterName),
+    );
 
     return {
       id: chapter.id,
       chapterNumber,
       title: chapter.chapter_title?.trim() || fallbackTitle,
       content: parsedOutput.chapterBody,
+      characterCandidates,
+      viewpoints: chapterViewpoints,
       directionInput: chapter.reader_input,
       choiceOptions,
       model: chapter.model,
@@ -1659,6 +2308,11 @@ async function insertChapterTurn(options: {
       chapterNumber,
       title: fallbackTitle,
       content: options.chapterBody,
+      characterCandidates: listCharacterCandidatesFromChapter(
+        fallbackTitle,
+        options.chapterBody,
+      ),
+      viewpoints: [],
       directionInput: options.directionInput,
       choiceOptions: options.choiceOptions.slice(0, 3),
       model: options.model,
@@ -1668,6 +2322,249 @@ async function insertChapterTurn(options: {
     await db.query("ROLLBACK").catch(() => undefined);
     throw error;
   }
+}
+
+async function insertChapterViewpoint(options: {
+  sessionId: string;
+  chapter: ReaderChapter;
+  characterName: string;
+  lens: ReaderChapterViewpointLens;
+  directionInput: string | null;
+  viewpointTitle: string;
+  viewpointBody: string;
+  model: string;
+}) {
+  const db = await getDatabase();
+  const nowIso = new Date().toISOString();
+  const viewpointId = randomUUID();
+
+  await db.query("BEGIN");
+
+  try {
+    const chapterResult = await db.query<{ id: string }>(
+      `
+        SELECT id
+        FROM story_turns
+        WHERE id = $1
+          AND session_id = $2
+        LIMIT 1
+        FOR UPDATE
+      `,
+      [options.chapter.id, options.sessionId],
+    );
+
+    if (!chapterResult.rows[0]) {
+      throw new Error("Chapter not found in this session.");
+    }
+
+    const existingViewpointsResult = await db.query<{ character_name: string }>(
+      `
+        SELECT character_name
+        FROM chapter_viewpoints
+        WHERE chapter_id = $1
+      `,
+      [options.chapter.id],
+    );
+    const requestedCharacterKey = toCharacterIdentityKey(options.characterName);
+    const conflictingViewpoint = existingViewpointsResult.rows.find(
+      (row) => toCharacterIdentityKey(row.character_name) === requestedCharacterKey,
+    );
+
+    if (conflictingViewpoint) {
+      throw new Error(
+        `A viewpoint for ${conflictingViewpoint.character_name} already exists in this chapter. Choose a different character.`,
+      );
+    }
+
+    await db.query(
+      `
+        INSERT INTO chapter_viewpoints (
+          id,
+          chapter_id,
+          character_name,
+          lens,
+          direction_input,
+          viewpoint_title,
+          ai_response,
+          model,
+          created_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+      `,
+      [
+        viewpointId,
+        options.chapter.id,
+        options.characterName,
+        options.lens,
+        options.directionInput,
+        options.viewpointTitle,
+        options.viewpointBody,
+        options.model,
+        nowIso,
+      ],
+    );
+
+    await db.query(
+      `
+        UPDATE story_sessions
+        SET updated_at = $2
+        WHERE id = $1
+      `,
+      [options.sessionId, nowIso],
+    );
+
+    await db.query("COMMIT");
+
+    return {
+      viewpoint: {
+        id: viewpointId,
+        chapterId: options.chapter.id,
+        chapterNumber: options.chapter.chapterNumber,
+        characterName: options.characterName,
+        lens: options.lens,
+        title: options.viewpointTitle,
+        content: options.viewpointBody,
+        directionInput: options.directionInput,
+        model: options.model,
+        createdAt: nowIso,
+      } satisfies ReaderChapterViewpoint,
+      sessionUpdatedAt: nowIso,
+    };
+  } catch (error) {
+    await db.query("ROLLBACK").catch(() => undefined);
+    throw error;
+  }
+}
+
+export async function generateChapterViewpoint(options: {
+  user: PublicUser;
+  sessionId: string;
+  chapterId: string;
+  characterName: string;
+  lens?: ReaderChapterViewpointLens;
+  directionInput?: string;
+  model?: string;
+}) {
+  const sessionId = options.sessionId.trim();
+  const chapterId = options.chapterId.trim();
+  const characterName = normalizeViewpointCharacterName(options.characterName);
+
+  if (!sessionId) {
+    throw new Error("sessionId is required.");
+  }
+
+  if (!chapterId) {
+    throw new Error("chapterId is required.");
+  }
+
+  if (!characterName) {
+    throw new Error("characterName is required.");
+  }
+
+  const directionInput = normalizeOptionalText(options.directionInput);
+
+  if (
+    directionInput &&
+    directionInput.length > MAX_VIEWPOINT_DIRECTION_LENGTH
+  ) {
+    throw new Error(
+      `directionInput must be ${MAX_VIEWPOINT_DIRECTION_LENGTH} characters or less.`,
+    );
+  }
+
+  const detail = await getReaderSessionDetail(options.user, sessionId);
+
+  if (!detail) {
+    throw new Error("Reading session not found.");
+  }
+
+  const chapter = detail.chapters.find((item) => item.id === chapterId);
+
+  if (!chapter) {
+    throw new Error("Chapter not found in this session.");
+  }
+
+  const requestedCharacterKey = toCharacterIdentityKey(characterName);
+  const existingViewpoint = chapter.viewpoints.find(
+    (viewpoint) => toCharacterIdentityKey(viewpoint.characterName) === requestedCharacterKey,
+  );
+
+  if (existingViewpoint) {
+    throw new Error(
+      `A viewpoint for ${existingViewpoint.characterName} already exists in this chapter. Choose a different character.`,
+    );
+  }
+
+  const lens = toViewpointLens(options.lens);
+  const profile = VIEWPOINT_GENERATION_PROFILES[lens];
+  const fallbackTitle = `Chapter ${chapter.chapterNumber} - ${characterName}'s View`;
+  let parsed: ParsedViewpointOutput = {
+    viewpointTitle: fallbackTitle,
+    viewpointBody: "",
+    didParseJson: false,
+  };
+  let modelUsed = options.model ?? "";
+
+  for (
+    let attempt = 1;
+    attempt <= VIEWPOINT_GENERATION_ATTEMPTS;
+    attempt += 1
+  ) {
+    const prompt =
+      attempt === 1
+        ? buildChapterViewpointPrompt({
+            detail,
+            chapter,
+            characterName,
+            lens,
+            directionInput,
+            profile,
+          })
+        : buildChapterViewpointExpansionPrompt({
+            chapter,
+            characterName,
+            lens,
+            directionInput,
+            profile,
+            currentTitle: parsed.viewpointTitle,
+            currentBody: parsed.viewpointBody,
+          });
+
+    const generated = await generateStoryText({
+      prompt,
+      model: options.model,
+      maxOutputTokens: profile.maxOutputTokens,
+      temperature: profile.temperature,
+    });
+
+    parsed = parseViewpointOutput(generated.text, fallbackTitle);
+    modelUsed = generated.model;
+
+    if (countWords(parsed.viewpointBody) >= profile.minAcceptedWords) {
+      break;
+    }
+  }
+
+  const viewpointWordCount = countWords(parsed.viewpointBody);
+
+  if (viewpointWordCount < profile.minAcceptedWords) {
+    throw new Error(
+      `Viewpoint generation returned only ${viewpointWordCount} words (minimum ${profile.minAcceptedWords}). Please try again.`,
+    );
+  }
+
+  const persisted = await insertChapterViewpoint({
+    sessionId,
+    chapter,
+    characterName,
+    lens,
+    directionInput,
+    viewpointTitle: parsed.viewpointTitle || fallbackTitle,
+    viewpointBody: parsed.viewpointBody,
+    model: modelUsed || "unknown-model",
+  });
+
+  return persisted;
 }
 
 async function markSessionCompleted(sessionId: string) {
@@ -1925,6 +2822,37 @@ export async function generateNextChapter(options: {
     });
     modelUsed = rescue.model;
     chapterWordCount = countWords(parsed.chapterBody);
+  }
+
+  if (CHAPTER_CONTINUITY_REVIEW_ENABLED && detail.chapters.length > 0) {
+    const previousChapter = detail.chapters[detail.chapters.length - 1];
+
+    const reviewed = await generateStoryText({
+      prompt: buildChapterContinuityRevisionPrompt({
+        previousChapter,
+        chapterNumber,
+        directionInput: direction,
+        chapterTitle: parsed.chapterTitle,
+        chapterBody: parsed.chapterBody,
+        profile: generationProfile,
+      }),
+      model: options.model,
+      maxOutputTokens: generationProfile.maxOutputTokens + 900,
+      temperature: 0.45,
+    });
+
+    const revised = parseChapterContinuityRevisionOutput(
+      reviewed.text,
+      parsed.chapterTitle,
+      parsed.chapterBody,
+    );
+
+    if (revised.didParseJson) {
+      parsed.chapterTitle = revised.chapterTitle;
+      parsed.chapterBody = revised.chapterBody;
+      modelUsed = reviewed.model;
+      chapterWordCount = countWords(parsed.chapterBody);
+    }
   }
 
   if (chapterWordCount < minimumAcceptedWords) {
