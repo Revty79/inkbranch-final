@@ -8,13 +8,13 @@ const DEFAULT_VOLUME = 0.16;
 const MIN_VOLUME = 0;
 const MAX_VOLUME = 0.6;
 const DEFAULT_AMBIENT_AUDIO_SOURCE = "/audio/ambient.mp3";
-const FALLBACK_AMBIENT_AUDIO_SOURCES = [
-  "/audio/music_for_video-please-calm-my-mind-125566.mp3",
-  "/audio/folk_acoustic-april-198611.mp3",
-  "/audio/stevekaldes-a-quiet-joy-stevekaldes-piano-385744.mp3",
-  "/audio/stevekaldes-snow-stevekaldes-piano-397491.mp3",
-  "/audio/stevekaldes-plea-for-forgiveness-stevekaldes-piano-art-ayla-heefner-401168.mp3",
-];
+const TRACKS_API_PATH = "/api/audio/tracks";
+const CONFIGURED_AMBIENT_AUDIO_SOURCE =
+  process.env.NEXT_PUBLIC_AMBIENT_AUDIO_SRC?.trim() ?? "";
+
+type AudioTracksResponse = {
+  tracks?: unknown;
+};
 
 function clampVolume(value: number) {
   if (!Number.isFinite(value)) {
@@ -27,24 +27,27 @@ function clampVolume(value: number) {
 export function AmbientPlayer() {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const fadeTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const sourceIndexRef = useRef(0);
+  const consecutiveErrorCountRef = useRef(0);
   const [hasHydrated, setHasHydrated] = useState(false);
   const [isEnabled, setIsEnabled] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
   const [hasTrackError, setHasTrackError] = useState(false);
   const [volume, setVolume] = useState(DEFAULT_VOLUME);
   const [sourceIndex, setSourceIndex] = useState(0);
+  const [discoveredSources, setDiscoveredSources] = useState<string[]>([]);
 
   const sourceCandidates = useMemo(() => {
-    const configuredSource = process.env.NEXT_PUBLIC_AMBIENT_AUDIO_SRC?.trim();
+    if (discoveredSources.length > 0) {
+      return discoveredSources;
+    }
+
     const allCandidates = [
-      configuredSource,
+      CONFIGURED_AMBIENT_AUDIO_SOURCE,
       DEFAULT_AMBIENT_AUDIO_SOURCE,
-      ...FALLBACK_AMBIENT_AUDIO_SOURCES,
     ].filter((value): value is string => Boolean(value));
 
     return [...new Set(allCandidates)];
-  }, []);
+  }, [discoveredSources]);
   const source =
     sourceCandidates[Math.min(sourceIndex, sourceCandidates.length - 1)] ??
     DEFAULT_AMBIENT_AUDIO_SOURCE;
@@ -103,18 +106,18 @@ export function AmbientPlayer() {
       return;
     }
 
-      try {
-        if (!audio.paused) {
-          fadeTo(volume);
-          return;
-        }
-
-        audio.loop = true;
-        audio.volume = clampVolume(volume);
-        await audio.play();
-      } catch {
-        // Playback can fail without a user gesture; keep state and let the next click retry.
+    try {
+      if (!audio.paused) {
+        fadeTo(volume);
+        return;
       }
+
+      audio.loop = false;
+      audio.volume = clampVolume(volume);
+      await audio.play();
+    } catch {
+      // Playback can fail without a user gesture; keep state and let the next click retry.
+    }
   }, [fadeTo, hasTrackError, volume]);
 
   useEffect(() => {
@@ -152,8 +155,48 @@ export function AmbientPlayer() {
   }, [hasHydrated, volume]);
 
   useEffect(() => {
-    sourceIndexRef.current = sourceIndex;
-  }, [sourceIndex]);
+    let isCancelled = false;
+
+    async function loadAudioSources() {
+      try {
+        const response = await fetch(TRACKS_API_PATH, { cache: "no-store" });
+
+        if (!response.ok) {
+          return;
+        }
+
+        const payload = (await response.json()) as AudioTracksResponse;
+
+        if (!Array.isArray(payload.tracks)) {
+          return;
+        }
+
+        const tracks = [...new Set(
+          payload.tracks
+            .filter((value): value is string => typeof value === "string")
+            .map((value) => value.trim())
+            .filter(Boolean),
+        )];
+
+        if (isCancelled || tracks.length === 0) {
+          return;
+        }
+
+        consecutiveErrorCountRef.current = 0;
+        setDiscoveredSources(tracks);
+        setSourceIndex((current) => Math.min(current, tracks.length - 1));
+        setHasTrackError(false);
+      } catch {
+        // Keep current defaults when directory scan cannot be loaded.
+      }
+    }
+
+    void loadAudioSources();
+
+    return () => {
+      isCancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     const audio = audioRef.current;
@@ -189,14 +232,33 @@ export function AmbientPlayer() {
       return;
     }
 
-    const handlePlaying = () => setIsPlaying(true);
+    const handlePlaying = () => {
+      consecutiveErrorCountRef.current = 0;
+      setIsPlaying(true);
+    };
     const handlePause = () => setIsPlaying(false);
+    const handleEnded = () => {
+      clearFadeTimer();
+      setIsPlaying(false);
+
+      if (sourceCandidates.length <= 1) {
+        void startPlayback();
+        return;
+      }
+
+      setSourceIndex((current) => (current + 1) % sourceCandidates.length);
+    };
     const handleError = () => {
       clearFadeTimer();
       setIsPlaying(false);
 
-      if (sourceIndexRef.current < sourceCandidates.length - 1) {
-        setSourceIndex((current) => Math.min(current + 1, sourceCandidates.length - 1));
+      consecutiveErrorCountRef.current += 1;
+
+      if (
+        sourceCandidates.length > 0 &&
+        consecutiveErrorCountRef.current < sourceCandidates.length
+      ) {
+        setSourceIndex((current) => (current + 1) % sourceCandidates.length);
         return;
       }
 
@@ -206,14 +268,16 @@ export function AmbientPlayer() {
 
     audio.addEventListener("playing", handlePlaying);
     audio.addEventListener("pause", handlePause);
+    audio.addEventListener("ended", handleEnded);
     audio.addEventListener("error", handleError);
 
     return () => {
       audio.removeEventListener("playing", handlePlaying);
       audio.removeEventListener("pause", handlePause);
+      audio.removeEventListener("ended", handleEnded);
       audio.removeEventListener("error", handleError);
     };
-  }, [clearFadeTimer, sourceCandidates.length]);
+  }, [clearFadeTimer, sourceCandidates.length, startPlayback]);
 
   useEffect(() => {
     return () => {
@@ -233,6 +297,7 @@ export function AmbientPlayer() {
           type="button"
           onClick={() => {
             if (hasTrackError) {
+              consecutiveErrorCountRef.current = 0;
               setSourceIndex(0);
               setHasTrackError(false);
               setIsEnabled(true);
@@ -281,12 +346,11 @@ export function AmbientPlayer() {
 
       {hasTrackError ? (
         <p className="mt-2 text-xs text-amber-800">
-          Could not load ambient track. Add <code>/public/audio/ambient.mp3</code> or set{" "}
-          <code>NEXT_PUBLIC_AMBIENT_AUDIO_SRC</code>.
+          Could not load ambient tracks. Add MP3 files in <code>/public/audio</code>.
         </p>
       ) : (
         <p className="mt-2 text-xs text-[var(--ink-muted)]">
-          Subtle loop for reading and writing sessions.
+          Cycles through all ambient tracks while you read and write.
         </p>
       )}
     </div>
